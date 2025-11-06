@@ -17,6 +17,7 @@ use crate::components::{CompletionDropdown, HoverTooltip};
 use crate::components::program_window::syntax_highlighter::highlight_code;
 use crate::function::Runner;
 use crate::lsp::{ConnectionState, LspClient, Position};
+use wasm_bindgen::JsCast;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Program {
@@ -320,6 +321,7 @@ pub fn ProgramTab() -> impl IntoView {
     let show_hover = create_rw_signal(false);
     let hover_position = create_rw_signal((0.0, 0.0));
     let hover_debounce_timer = create_rw_signal(0);
+    let current_hover_word = create_rw_signal(Option::<(u32, u32)>::None); // Track (line, character) of current hover word
 
     // Document URI for LSP
     let document_uri = "file:///main.simf";
@@ -405,8 +407,174 @@ pub fn ProgramTab() -> impl IntoView {
             let _result = element.set_selection_range(start - 4, start - 4);
         }
     };
+    // Helper function to check if we're inside a string or comment
+    let is_in_string_or_comment = |text: &str, pos: usize| -> bool {
+        if pos >= text.len() {
+            return false;
+        }
+        
+        let before = &text[..pos];
+        let mut in_string = false;
+        let mut in_char = false;
+        let mut in_comment = false;
+        let mut in_line_comment = false;
+        let mut string_delimiter = '"';
+        let mut chars = before.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if in_line_comment {
+                if ch == '\n' {
+                    in_line_comment = false;
+                }
+                continue;
+            }
+            
+            if in_comment {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    in_comment = false;
+                }
+                continue;
+            }
+            
+            if in_string || in_char {
+                if (in_string && ch == string_delimiter) || (in_char && ch == '\'') {
+                    // Check if escaped
+                    let mut backslash_count = 0;
+                    let mut check_pos = before.len().saturating_sub(2);
+                    while check_pos < before.len() && check_pos > 0 {
+                        if let Some(c) = before.chars().nth(check_pos) {
+                            if c == '\\' {
+                                backslash_count += 1;
+                                check_pos = check_pos.saturating_sub(1);
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    if backslash_count % 2 == 0 {
+                        in_string = false;
+                        in_char = false;
+                    }
+                }
+                continue;
+            }
+            
+            if ch == '"' || ch == '\'' {
+                in_string = ch == '"';
+                in_char = ch == '\'';
+                string_delimiter = ch;
+            } else if ch == '/' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_line_comment = true;
+            } else if ch == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                in_comment = true;
+            }
+        }
+        
+        in_string || in_char || in_comment || in_line_comment
+    };
+    
+    // Helper function to insert text at cursor position
+    let textarea_ref_for_insert = textarea_ref.clone();
+    let insert_text_at_cursor = move |text: &str, insert: &str| -> Option<String> {
+        if let Some(element) = textarea_ref_for_insert.get() {
+            if let Ok(Some(start)) = element.selection_start() {
+                if let Ok(Some(end)) = element.selection_end() {
+                    let start_pos = start as usize;
+                    let end_pos = end as usize;
+                    let mut new_text = text.to_string();
+                    new_text.replace_range(start_pos..end_pos, insert);
+                    return Some(new_text);
+                }
+            }
+        }
+        None
+    };
+
     let handle_keydown = move |event: ev::KeyboardEvent| {
         let is_completions_shown = show_completions.get_untracked();
+        let key = event.key();
+
+        // Handle bracket auto-completion before other handlers
+        if !is_completions_shown {
+            let bracket_pairs = [
+                ('(', ')'),
+                ('[', ']'),
+                ('{', '}'),
+            ];
+            
+            for (open, close) in bracket_pairs.iter() {
+                if key == open.to_string() {
+                    if let Some(element) = textarea_ref.get() {
+                        if let Ok(Some(start)) = element.selection_start() {
+                            let text = program.text.get_untracked();
+                            let pos = start as usize;
+                            
+                            // Don't auto-close if we're in a string or comment
+                            if is_in_string_or_comment(&text, pos) {
+                                return; // Let default behavior handle it
+                            }
+                            
+                            // Check if there's already a closing bracket immediately after
+                            if pos < text.len() {
+                                let after = &text[pos..];
+                                if let Some(next_char) = after.chars().next() {
+                                    if next_char == *close {
+                                        // There's already a closing bracket, just move cursor forward
+                                        event.prevent_default();
+                                        let _ = element.set_selection_range(start + 1, start + 1);
+                                        return;
+                                    }
+                                }
+                            }
+                            
+                            // Insert opening bracket + closing bracket, position cursor between them
+                            event.prevent_default();
+                            let pair = format!("{}{}", open, close);
+                            if let Some(new_text) = insert_text_at_cursor(&text, &pair) {
+                                program.text.set(new_text);
+                                // Position cursor between the brackets
+                                let _ = element.set_selection_range(start + 1, start + 1);
+                            }
+                            return;
+                        }
+                    }
+                }
+                
+                // Handle closing bracket - if there's already a closing bracket, skip it
+                if key == close.to_string() {
+                    if let Some(element) = textarea_ref.get() {
+                        if let Ok(Some(start)) = element.selection_start() {
+                            let text = program.text.get_untracked();
+                            let pos = start as usize;
+                            
+                            // Don't skip if we're in a string or comment
+                            if is_in_string_or_comment(&text, pos) {
+                                return; // Let default behavior handle it
+                            }
+                            
+                            // Check if there's already a closing bracket immediately after
+                            if pos < text.len() {
+                                let after = &text[pos..];
+                                if let Some(next_char) = after.chars().next() {
+                                    if next_char == *close {
+                                        // Skip the existing closing bracket
+                                        event.prevent_default();
+                                        let _ = element.set_selection_range(start + 1, start + 1);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Handle arrow keys and Enter when completions are shown
         if is_completions_shown {
@@ -604,51 +772,297 @@ pub fn ProgramTab() -> impl IntoView {
         }
     });
 
+    // Helper function to extract word at or near a given character position
+    // This allows hover to work when the mouse is near a word, not just directly on it
+    let extract_word_at_position = |text: &str, pos: usize| -> Option<(usize, usize)> {
+        if text.is_empty() {
+            return None;
+        }
+        
+        let chars: Vec<char> = text.chars().collect();
+        if pos >= chars.len() {
+            return None;
+        }
+        
+        let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
+        
+        // Strategy: Find the nearest word character within a small range
+        // This makes the hover area work for the whole word, not just the exact character
+        
+        // First, check if we're directly on a word character
+        if is_word_char(chars[pos]) {
+            // We're on a word character - find the word boundaries
+            let mut start = pos;
+            while start > 0 && is_word_char(chars[start - 1]) {
+                start -= 1;
+            }
+            
+            let mut end = pos;
+            while end < chars.len() && is_word_char(chars[end]) {
+                end += 1;
+            }
+            
+            if start < end {
+                return Some((start, end));
+            }
+        }
+        
+        // If not directly on a word, search nearby (within 3 characters) for a word
+        // This makes the hover area larger and more forgiving
+        let search_range = 3;
+        let search_start = pos.saturating_sub(search_range);
+        let search_end = (pos + search_range + 1).min(chars.len());
+        
+        // Find the closest word character to our position
+        let mut best_word: Option<(usize, usize)> = None;
+        let mut best_distance = usize::MAX;
+        
+        for i in search_start..search_end {
+            if is_word_char(chars[i]) {
+                // Found a word character - find the word boundaries
+                let mut start = i;
+                while start > 0 && is_word_char(chars[start - 1]) {
+                    start -= 1;
+                }
+                
+                let mut end = i;
+                while end < chars.len() && is_word_char(chars[end]) {
+                    end += 1;
+                }
+                
+                if start < end {
+                    // Calculate distance from mouse position to word
+                    // Distance is 0 if mouse is within word, otherwise distance to nearest edge
+                    let distance = if pos >= start && pos < end {
+                        0 // Mouse is within the word
+                    } else if pos < start {
+                        start - pos // Distance to word start
+                    } else {
+                        pos - end + 1 // Distance to word end
+                    };
+                    
+                    // Keep the closest word
+                    if distance < best_distance {
+                        best_distance = distance;
+                        best_word = Some((start, end));
+                    }
+                }
+            }
+        }
+        
+        best_word
+    };
+    
+    // Helper function to calculate character position from mouse coordinates
+    // Uses a more accurate method that accounts for padding and textarea styling
+    let calculate_char_position_from_mouse = |textarea: &web_sys::HtmlTextAreaElement, text: &str, offset_x: f64, offset_y: f64| -> Option<usize> {
+        // Get textarea style to calculate character dimensions
+        let window = web_sys::window()?;
+        let computed_style = window
+            .get_computed_style(textarea)
+            .ok()??;
+        
+        // Get font metrics - use a more accurate method
+        // Create a temporary span to measure character width
+        let char_width = {
+            let document = window.document()?;
+            let test_span = document.create_element("span").ok()?;
+            let test_span_elem: &web_sys::HtmlElement = test_span.dyn_ref()?;
+            test_span_elem.set_text_content(Some("M"));
+            test_span_elem.style().set_property("position", "absolute").ok()?;
+            test_span_elem.style().set_property("visibility", "hidden").ok()?;
+            test_span_elem.style().set_property("white-space", "pre").ok()?;
+            
+            let font_family = computed_style.get_property_value("font-family").ok()?;
+            let font_size = computed_style.get_property_value("font-size").ok()?;
+            test_span_elem.style().set_property("font-family", &font_family).ok()?;
+            test_span_elem.style().set_property("font-size", &font_size).ok()?;
+            
+            textarea.parent_element()?.append_child(test_span_elem).ok()?;
+            let width = test_span_elem.offset_width() as f64;
+            let _ = textarea.parent_element()?.remove_child(test_span_elem);
+            
+            if width > 0.0 {
+                width
+            } else {
+                7.2 // Fallback to approximate width
+            }
+        };
+        
+        // Get line height
+        let line_height = {
+            let line_height_str = computed_style.get_property_value("line-height").ok()?;
+            if let Ok(height) = line_height_str.trim_end_matches("px").parse::<f64>() {
+                height
+            } else {
+                18.0 // Fallback
+            }
+        };
+        
+        // Account for textarea padding (if any)
+        // Get padding-left to adjust offset_x
+        let padding_left = computed_style
+            .get_property_value("padding-left")
+            .ok()?
+            .trim_end_matches("px")
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        
+        let padding_top = computed_style
+            .get_property_value("padding-top")
+            .ok()?
+            .trim_end_matches("px")
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        
+        // Adjust offset to account for padding
+        let adjusted_x = (offset_x - padding_left).max(0.0);
+        let adjusted_y = (offset_y - padding_top).max(0.0);
+        
+        // Calculate which line we're on
+        let scroll_top = textarea.scroll_top() as f64;
+        let line_index = ((adjusted_y + scroll_top) / line_height).floor() as usize;
+        
+        // Calculate character position in that line
+        let char_index = (adjusted_x / char_width).floor() as usize;
+        
+        // Convert line/char to absolute character position
+        let lines: Vec<&str> = text.split('\n').collect();
+        if line_index >= lines.len() {
+            return None;
+        }
+        
+        let mut char_pos = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if i == line_index {
+                // We're on this line
+                let char_in_line = char_index.min(line.chars().count());
+                return Some(char_pos + char_in_line);
+            }
+            char_pos += line.chars().count() + 1; // +1 for newline
+        }
+        
+        None
+    };
+
+    // Effect to show/hide hover tooltip based on hover_info
+    let lsp_client_for_hover_effect = lsp_client_for_hover.clone();
+    create_effect(move |_| {
+        if let Some(lsp) = lsp_client_for_hover_effect.as_ref() {
+            let hover_info = lsp.hover_info();
+            let has_hover_data = hover_info.get().is_some();
+            let current_word = current_hover_word.get();
+            
+            // Only show hover if we have data and we're still hovering over the same word
+            if has_hover_data && current_word.is_some() {
+                show_hover.set(true);
+                log::debug!("Hover tooltip should be visible");
+            } else {
+                show_hover.set(false);
+            }
+        }
+    });
+
     // Handle mouse move for hover with debouncing
     let handle_mouse_move = move |event: ev::MouseEvent| {
         // Clear any existing hover when completions are shown
         if show_completions.get_untracked() {
             show_hover.set(false);
+            current_hover_word.set(None);
+            hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
             return;
         }
 
         if let Some(lsp) = lsp_client_for_hover.as_ref() {
-            if let Some(_element) = textarea_ref.get() {
-                // Calculate approximate cursor position from mouse coordinates
-                // This is a simplified approach based on fixed character/line dimensions
-                let char_width = 7.2;
-                let line_height = 18.0;
-
+            if let Some(element) = textarea_ref.get() {
+                let text = program.text.get_untracked();
+                
+                // Calculate character position from mouse coordinates
                 let offset_x = event.offset_x() as f64;
                 let offset_y = event.offset_y() as f64;
-
-                let line = (offset_y / line_height).floor() as u32;
-                let character = (offset_x / char_width).floor() as u32;
-
-                // Set hover position for tooltip
+                
+                let char_pos = match calculate_char_position_from_mouse(&element, &text, offset_x, offset_y) {
+                    Some(pos) => pos,
+                    None => {
+                        show_hover.set(false);
+                        current_hover_word.set(None);
+                        hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
+                        return;
+                    }
+                };
+                
+                // Extract word at this position
+                let word_range = match extract_word_at_position(&text, char_pos) {
+                    Some(range) => {
+                        log::debug!("Found word at char pos {}: '{}'", char_pos, &text[range.0..range.1.min(text.len())]);
+                        range
+                    },
+                    None => {
+                        // Not hovering over a word, hide hover
+                        log::debug!("No word found at char pos {}", char_pos);
+                        show_hover.set(false);
+                        current_hover_word.set(None);
+                        hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
+                        return;
+                    }
+                };
+                
+                // Set hover position for tooltip (position it near the mouse)
                 hover_position.set((
                     event.client_x() as f64 + 10.0,
                     event.client_y() as f64 + 10.0,
                 ));
-
+                
+                // Calculate line and character for LSP request (use start of word)
+                // Always use the word's start position, not the mouse position
+                let before_word = &text[..word_range.0];
+                let line = before_word.matches('\n').count() as u32;
+                let line_start = before_word.rfind('\n').map(|p| p + 1).unwrap_or(0);
+                let character = (word_range.0 - line_start) as u32;
+                
+                log::debug!("Word '{}' at line {}, char {} (mouse was at char pos {})", 
+                    &text[word_range.0..word_range.1.min(text.len())], 
+                    line, character, char_pos);
+                
+                // Check if we're hovering over the same word
+                let new_word_pos = (line, character);
+                let is_same_word = current_hover_word.get_untracked()
+                    .map(|(l, c)| l == line && c == character)
+                    .unwrap_or(false);
+                
+                if !is_same_word {
+                    // New word - update tracking and hide hover until new data arrives
+                    current_hover_word.set(Some(new_word_pos));
+                    show_hover.set(false); // Hide until new hover data arrives
+                }
+                
                 // Debounce: increment timer
                 let timer_id = hover_debounce_timer.get_untracked() + 1;
                 hover_debounce_timer.set(timer_id);
-
+                
                 let lsp = lsp.clone();
                 let doc_uri = document_uri.to_string();
-
-                // Debounce hover requests (500ms)
+                let position = Position { line, character };
+                let hover_debounce_timer_clone = hover_debounce_timer;
+                let current_hover_word_clone = current_hover_word;
+                
+                // Debounce hover requests (200ms - reduced for better responsiveness)
                 spawn_local(async move {
-                    gloo_timers::future::TimeoutFuture::new(500).await;
-
-                    // Only proceed if timer hasn't been reset
-                    if hover_debounce_timer.get_untracked() == timer_id {
-                        let position = Position { line, character };
-                        if let Err(e) = lsp.request_hover(doc_uri, position) {
-                            log::debug!("Failed to request hover: {}", e);
+                    gloo_timers::future::TimeoutFuture::new(200).await;
+                    
+                    // Only proceed if timer hasn't been reset and we're still on the same word
+                    if hover_debounce_timer_clone.get_untracked() == timer_id {
+                        let still_on_same_word = current_hover_word_clone.get_untracked()
+                            .map(|(l, c)| l == position.line && c == position.character)
+                            .unwrap_or(false);
+                        
+                        if still_on_same_word {
+                            log::debug!("Requesting hover at line {}, char {}", position.line, position.character);
+                            if let Err(e) = lsp.request_hover(doc_uri, position) {
+                                log::debug!("Failed to request hover: {}", e);
+                            }
                         } else {
-                            show_hover.set(true);
+                            log::debug!("Skipping hover request - moved to different word");
                         }
                     }
                 });
@@ -658,6 +1072,7 @@ pub fn ProgramTab() -> impl IntoView {
 
     let handle_mouse_leave = move |_: ev::MouseEvent| {
         show_hover.set(false);
+        current_hover_word.set(None);
         hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
     };
 
@@ -701,11 +1116,13 @@ pub fn ProgramTab() -> impl IntoView {
             // Show hover tooltip when hovering
             {
                 move || {
+                    // Only show if hover is enabled, completions are not shown, and we have hover data
                     if show_hover.get() && !show_completions.get() {
                         lsp_client_for_hover_tooltip.as_ref().and_then(|lsp| {
                             let hover_signal = lsp.hover_info();
                             let hover_data = hover_signal.get();
 
+                            // Double-check we have data (the effect should handle this, but be safe)
                             if hover_data.is_some() {
                                 let hover_sig: Signal<_> = hover_signal.into();
                                 Some(view! {
