@@ -230,14 +230,9 @@ impl LspClient {
                     match request_type {
                         PendingRequest::Completion => {
                             if let Some(result) = response.result {
-                                log::debug!("Parsing completion result: {:?}", result);
                                 match serde_json::from_value::<Vec<CompletionItem>>(result.clone())
                                 {
                                     Ok(items) => {
-                                        log::info!(
-                                            "✅ Successfully parsed {} completion items",
-                                            items.len()
-                                        );
                                         for item in items.iter().take(3) {
                                             log::debug!("  - {}", item.label);
                                         }
@@ -299,10 +294,8 @@ impl LspClient {
                         }
                         PendingRequest::Hover => {
                             if let Some(result) = response.result {
-                                log::debug!("Parsing hover result: {:?}", result);
                                 match serde_json::from_value::<Hover>(result) {
                                     Ok(hover) => {
-                                        log::info!("✅ Successfully parsed hover info");
                                         self.hover_info.set(Some(hover));
                                     }
                                     Err(e) => {
@@ -326,14 +319,6 @@ impl LspClient {
                     self.pending_requests.update(|requests| {
                         requests.remove(&response.id);
                     });
-                } else {
-                    if let Some(result) = &response.result {
-                        log::debug!("Response result: {:?}", result);
-                    }
-                }
-
-                if let Some(error) = &response.error {
-                    log::error!("LSP error response: {:?}", error);
                 }
             }
             JsonRpcMessage::Request(_) => {
@@ -357,7 +342,6 @@ impl LspClient {
                     diagnostics.insert(params.uri.clone(), params.diagnostics);
                 });
 
-                log::debug!("Updated diagnostics for: {}", params.uri);
             }
             _ => {
                 log::debug!("Unhandled notification: {}", notification.method);
@@ -375,8 +359,6 @@ impl LspClient {
 
         let json = serde_json::to_string(message)
             .map_err(|e| LspClientError::SerializationError(e.to_string()))?;
-
-        log::debug!("Sending LSP message: {}", json);
 
         sender
             .unbounded_send(json)
@@ -450,7 +432,6 @@ impl LspClient {
 
     pub fn did_open(&self, uri: String, content: String) -> Result<(), LspClientError> {
         let state = self.state.get_untracked();
-        log::debug!("did_open called, current state: {:?}", state);
         if state != ConnectionState::Initialized {
             log::warn!(
                 "Cannot open document - LSP state is {:?}, not Initialized",
@@ -488,8 +469,6 @@ impl LspClient {
             );
         });
 
-        log::debug!("Opened document: {}", uri);
-
         // Request initial semantic tokens
         let _ = self.request_semantic_tokens(uri);
 
@@ -498,7 +477,6 @@ impl LspClient {
 
     pub fn did_change(&self, uri: String, content: String) -> Result<(), LspClientError> {
         let state = self.state.get_untracked();
-        log::debug!("did_change called, current state: {:?}", state);
         if state != ConnectionState::Initialized {
             log::warn!(
                 "Cannot update document - LSP state is {:?}, not Initialized",
@@ -535,7 +513,6 @@ impl LspClient {
             docs.insert(uri.clone(), DocumentState { version, content });
         });
 
-        log::debug!("Changed document: {} (version {})", uri, version);
 
         // Request updated semantic tokens
         let _ = self.request_semantic_tokens(uri);
@@ -571,7 +548,6 @@ impl LspClient {
             requests.insert(request_id, PendingRequest::Completion);
         });
 
-        log::debug!("Requesting completion at position {:?}", position);
         self.send_message(&request)?;
 
         Ok(())
@@ -628,7 +604,6 @@ impl LspClient {
             requests.insert(request_id, PendingRequest::Hover);
         });
 
-        log::debug!("Requesting hover at position {:?}", position);
         self.send_message(&request)?;
 
         Ok(())

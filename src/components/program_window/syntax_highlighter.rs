@@ -4,8 +4,6 @@ pub fn highlight_code(code: &str) -> String {
         return String::new();
     }
     
-    log::debug!("Highlighting code, length: {}", code.len());
-
     // Keywords that should be highlighted
     let keywords = [
         "let", "mut", "if", "else", "match", "fn", "return", "pub", "struct", "enum",
@@ -159,7 +157,6 @@ pub fn highlight_code(code: &str) -> String {
                 // Check if it's a keyword
                 if keywords.contains(&word) {
                     let highlighted = format!("<span class=\"hl-keyword\">{}</span>", escape_html(word));
-                    log::debug!("Highlighting keyword: '{}' -> '{}'", word, highlighted);
                     result.push_str(&highlighted);
                     if word == "fn" { expect_fn_name = true; }
                 } else if expect_fn_name {
@@ -220,14 +217,6 @@ pub fn highlight_code(code: &str) -> String {
         }
     }
 
-    log::debug!("Highlighting complete. Result length: {}, contains spans: {}", result.len(), result.contains("<span"));
-    // Log a sample if it's not too long
-    if result.len() > 300 {
-        log::debug!("Result sample (first 300 chars): {}", &result[..300]);
-    } else {
-        log::debug!("Full result: {}", result);
-    }
-    
     result
 }
 

@@ -254,8 +254,6 @@ pub fn ProgramTab() -> impl IntoView {
                             .cloned()
                             .collect();
                         
-                        log::debug!("Filtered {} completions with prefix '{}' from {} total", filtered.len(), partial_text, lsp_completions.len());
-                        
                         // Update item count for arrow key navigation
                         completion_items_count.set(filtered.len());
                         filtered_completion_items.set(filtered);
@@ -265,7 +263,6 @@ pub fn ProgramTab() -> impl IntoView {
                         return;
                     } else {
                         // Cursor is exactly at trigger position - show all completions
-                        log::debug!("Cursor at trigger position, showing all {} completions", lsp_completions.len());
                         completion_items_count.set(lsp_completions.len());
                         filtered_completion_items.set(lsp_completions.clone());
                         selected_completion_index.set(0);
@@ -311,7 +308,6 @@ pub fn ProgramTab() -> impl IntoView {
                 
                 if !cursor_at_trigger {
                     // Cursor has moved past trigger and no items match - hide dropdown
-                    log::debug!("Auto-hiding dropdown: no items match after cursor moved past trigger");
                     completion_trigger_pos.set(None);
                     show_completions.set(false);
                     completion_items_count.set(0);
@@ -813,10 +809,6 @@ pub fn ProgramTab() -> impl IntoView {
                             let items_count = lsp.completions().get_untracked().len();
                             completion_items_count.set(items_count);
                             show_completions.set(true);
-                            log::debug!(
-                                "show_completions is now: {}",
-                                show_completions.get_untracked()
-                            );
                         }
                     }
                 }
@@ -858,7 +850,6 @@ pub fn ProgramTab() -> impl IntoView {
                 let _ = highlight.set_scroll_top(scroll_top);
                 let _ = highlight.set_scroll_left(scroll_left);
             }
-            log::debug!("SCROLL: textarea top={} left={}", scroll_top, scroll_left);
         }
     };
     
@@ -877,8 +868,6 @@ pub fn ProgramTab() -> impl IntoView {
                 let html_lines = html.matches('\n').count() + 1;
                 if html_lines == text_lines {
                     return html.clone();
-                } else {
-                    log::debug!("LSP HTML line mismatch: html_lines={} text_lines={}", html_lines, text_lines);
                 }
             }
         }
@@ -1116,7 +1105,6 @@ pub fn ProgramTab() -> impl IntoView {
             // Only show hover if we have data and we're still hovering over the same word
             if has_hover_data && current_word.is_some() {
                 show_hover.set(true);
-                log::debug!("Hover tooltip should be visible");
             } else {
                 show_hover.set(false);
             }
@@ -1154,12 +1142,9 @@ pub fn ProgramTab() -> impl IntoView {
                 // Extract word at this position
                 let word_range = match extract_word_at_position(&text, char_pos) {
                     Some(range) => {
-                        log::debug!("Found word at char pos {}: '{}'", char_pos, &text[range.0..range.1.min(text.len())]);
                         range
                     },
                     None => {
-                        // Not hovering over a word, hide hover
-                        log::debug!("No word found at char pos {}", char_pos);
                         show_hover.set(false);
                         current_hover_word.set(None);
                         hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
@@ -1179,10 +1164,6 @@ pub fn ProgramTab() -> impl IntoView {
                 let line = before_word.matches('\n').count() as u32;
                 let line_start = before_word.rfind('\n').map(|p| p + 1).unwrap_or(0);
                 let character = (word_range.0 - line_start) as u32;
-                
-                log::debug!("Word '{}' at line {}, char {} (mouse was at char pos {})", 
-                    &text[word_range.0..word_range.1.min(text.len())], 
-                    line, character, char_pos);
                 
                 // Check if we're hovering over the same word
                 let new_word_pos = (line, character);
@@ -1215,15 +1196,6 @@ pub fn ProgramTab() -> impl IntoView {
                         let still_on_same_word = current_hover_word_clone.get_untracked()
                             .map(|(l, c)| l == position.line && c == position.character)
                             .unwrap_or(false);
-                        
-                        if still_on_same_word {
-                            log::debug!("Requesting hover at line {}, char {}", position.line, position.character);
-                            if let Err(e) = lsp.request_hover(doc_uri, position) {
-                                log::debug!("Failed to request hover: {}", e);
-                            }
-                        } else {
-                            log::debug!("Skipping hover request - moved to different word");
-                        }
                     }
                 });
             }
@@ -1308,10 +1280,8 @@ pub fn ProgramTab() -> impl IntoView {
                     // Clone handles inside the Fn closure so inner handlers can move them without making this FnOnce
                     let lsp_for_completion_handler = lsp_client_for_completion_request.clone();
                     let should_show = show_completions.get();
-                    log::debug!("Completion dropdown check: show={}", should_show);
                     if should_show {
                         let filtered_items = filtered_completion_items.get();
-                        log::debug!("Filtered completion items count: {}", filtered_items.len());
                         
                         // Don't render if we have no items (the auto-hide effect will handle hiding)
                         if filtered_items.is_empty() {
@@ -1322,7 +1292,6 @@ pub fn ProgramTab() -> impl IntoView {
                             
                             if !has_lsp_completions {
                                 // Still waiting for completions - don't render yet
-                                log::debug!("Waiting for LSP completions to arrive...");
                                 return None;
                             }
                             // Otherwise, we have LSP completions but filtered items are empty
