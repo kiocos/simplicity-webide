@@ -4,6 +4,7 @@ mod help_button;
 mod program_tab;
 mod run_button;
 mod share_button;
+mod syntax_highlighter;
 mod tools_dropdown;
 mod transaction_button;
 

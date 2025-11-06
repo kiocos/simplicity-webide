@@ -1,0 +1,98 @@
+@use "../helpers.scss";
+
+.lsp-diagnostics {
+  margin-top: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 12px;
+}
+
+.diagnostics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diagnostic {
+  padding: 8px 12px;
+  border-left: 3px solid;
+  border-radius: 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: background-color 0.2s;
+
+  &:hover {
+    filter: brightness(1.1);
+  }
+}
+
+.diagnostic-error {
+  border-color: #f14c4c;
+  background: rgba(241, 76, 76, 0.12);
+  color: #f88;
+}
+
+.diagnostic-warning {
+  border-color: #cca700;
+  background: rgba(204, 167, 0, 0.12);
+  color: #ffd966;
+}
+
+.diagnostic-info {
+  border-color: #75beff;
+  background: rgba(117, 190, 255, 0.12);
+  color: #a8c7fa;
+}
+
+.diagnostic-hint {
+  border-color: #d4d4d4;
+  background: rgba(212, 212, 212, 0.08);
+  color: #d4d4d4;
+}
+
+.diagnostic-default {
+  border-color: #999;
+  background: rgba(153, 153, 153, 0.12);
+  color: #ccc;
+}
+
+.diagnostic-location {
+  font-size: 11px;
+  opacity: 0.7;
+  font-family: monospace;
+}
+
+.diagnostic-message {
+  flex: 1;
+}
+
+.lsp-status {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.status-initialized {
+  color: #4caf50;
+}
+
+.status-connected {
+  color: #2196f3;
+}
+
+.status-error {
+  color: #f44336;
+}
+
+.status-connecting {
+  color: #ff9800;
+}
+
+.status-disconnected {
+  color: #888;
+}

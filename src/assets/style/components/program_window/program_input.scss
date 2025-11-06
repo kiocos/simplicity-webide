@@ -1,33 +1,121 @@
 @use "../../helpers";
 
+.program-input {
+  background-color: helpers.$background-light;
+  padding: 30px;
+  border-radius: 7.5px;
 
-.program-input{
-    background-color: helpers.$background-light;
-    padding: 30px;
-    border-radius: 7.5px;
+  &-field {
+    flex: 1;
+    width: 100%;
+    background-color: transparent;
+    border-radius: 0;
+    border: none;
+    color: transparent; // Transparent so overlay shows through
+    font-family: "Roboto Mono", monospace;
+    font-size: 12px;
+    resize: none;
+    padding: 12px;
+    margin: 0;
+    line-height: 1.5;
+    white-space: pre; // Disable word wrap
+    overflow-x: auto; // Enable horizontal scrolling
+    position: relative;
+    z-index: 2;
+    caret-color: #fdc667; // Keep caret visible
 
-
-    &-field{
-        width: 100%;
-        background-color: helpers.$background-dark;
-        border-radius: 7.5px;
-        border: 1px solid rgba(255, 255, 255, 0.10);
-        color: #fdc667;
-        font-family: 'Roboto Mono', monospace;
-        font-size: 12px;
-        resize: none;
-        padding: 12px;
-        &:focus-visible {
-            outline: none;
-        }
-
-        scrollbar-color: helpers.$background-dark #424242;
-        scrollbar-width: thin;
+    &:focus-visible {
+      outline: none;
     }
+
+    scrollbar-color: helpers.$background-dark #424242;
+    scrollbar-width: thin;
+  }
+}
+
+.editor-container {
+  display: flex;
+  position: relative;
+  width: 100%;
+  background-color: helpers.$background-dark;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7.5px;
+  overflow: hidden;
+}
+
+.editor-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.syntax-highlight-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 12px;
+  background-color: transparent;
+  color: #fdc667; // Default text color (matches textarea) - spans will override
+  font-family: "Roboto Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+  border: none;
+  box-sizing: border-box;
+}
+
+.line-numbers {
+  flex-shrink: 0;
+  width: 45px;
+  padding: 12px 8px 12px 12px;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  color: #858585;
+  font-family: "Roboto Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
+  user-select: none;
+  overflow: hidden;
+  white-space: pre;
+  pointer-events: none;
 }
 
 .copy-program {
-    position: absolute;
-    top: 40px;
-    right: 50px;
+  position: absolute;
+  top: 40px;
+  right: 50px;
+}
+
+// Syntax highlighting colors - must be more specific to override defaults
+.syntax-highlight-overlay :global(.hl-keyword) {
+  color: #c586c0 !important;
+}
+
+.syntax-highlight-overlay :global(.hl-string) {
+  color: #ce9178 !important;
+}
+
+.syntax-highlight-overlay :global(.hl-comment) {
+  color: #6a9955 !important;
+  font-style: italic;
+}
+
+.syntax-highlight-overlay :global(.hl-number) {
+  color: #b5cea8 !important;
+}
+
+.syntax-highlight-overlay :global(.hl-operator) {
+  color: #d4d4d4 !important;
+}
+
+.syntax-highlight-overlay :global(.hl-namespace) {
+  color: #4ec9b0 !important;
 }

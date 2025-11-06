@@ -1,8 +1,12 @@
 mod analysis;
 mod app;
+mod completion_dropdown;
 mod copy_to_clipboard;
 mod dropdown;
 mod footer;
+mod hover_tooltip;
+mod lsp_debug;
+mod lsp_status;
 mod navbar;
 mod navigation;
 mod program_window;
@@ -12,3 +16,5 @@ mod string_box;
 mod toolbar;
 
 pub use app::App;
+pub use completion_dropdown::CompletionDropdown;
+pub use hover_tooltip::HoverTooltip;

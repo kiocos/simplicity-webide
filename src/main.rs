@@ -2,6 +2,7 @@ mod components;
 mod examples;
 mod function;
 mod jet;
+mod lsp;
 mod transaction;
 mod util;
 
@@ -14,6 +15,9 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 fn main() {
     console_error_panic_hook::set_once();
+
+    // Initialize logger for WASM
+    wasm_logger::init(wasm_logger::Config::default());
 
     mount_to_body(|| {
         view! {

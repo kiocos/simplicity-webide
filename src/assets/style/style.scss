@@ -1,134 +1,145 @@
-@use 'helpers.scss';
-@use 'components/analysis.scss';
-@use 'components/program_window/program_input.scss';
-@use 'components/merkle.scss';
-@use 'components/merkle_graph.scss';
-@use 'components/navigation.scss';
-@use 'components/navbar.scss';
-@use 'components/string_box.scss';
-@use 'components/tab_content.scss';
-@use 'components/tooltip.scss';
-@use 'components/footer.scss';
+@use "helpers.scss";
+@use "components/analysis.scss";
+@use "components/program_window/program_input.scss";
+@use "components/merkle.scss";
+@use "components/merkle_graph.scss";
+@use "components/navigation.scss";
+@use "components/navbar.scss";
+@use "components/string_box.scss";
+@use "components/tab_content.scss";
+@use "components/tooltip.scss";
+@use "components/footer.scss";
+@use "components/lsp_diagnostics.scss";
+@use "components/completion_dropdown.scss";
+@use "components/hover_tooltip.scss";
 
 * {
-    box-sizing: border-box;
-    padding: 0;
-    margin: 0;
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
 }
 
 html {
-    scrollbar-color: helpers.$background-dark #424242;
-    scrollbar-width: thin;
+  scrollbar-color: helpers.$background-dark #424242;
+  scrollbar-width: thin;
 }
 
 body {
-    background-color: helpers.$body-background;
-    color: helpers.$text-white;
-    font-family: "Ubuntu", sans-serif;
+  background-color: helpers.$body-background;
+  color: helpers.$text-white;
+  font-family: "Ubuntu", sans-serif;
 }
 
-h1, h2, h3, h4, h5, h6{
-    font-family: 't26-carbon', 'sans-serif';
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "t26-carbon", "sans-serif";
 }
 
 a {
-    color: #FF9517;
+  color: #ff9517;
 
-    &:hover {
-        color: white;
-    }
+  &:hover {
+    color: white;
+  }
 }
 
 p {
-    margin: 0;
-    line-height: 1.5;
+  margin: 0;
+  line-height: 1.5;
 }
 
 .main-content {
-    padding: 0 37px;
-    margin: 40px auto 75px;
-    @media (max-width: 768px) {
-        margin-top: 30px;
-        padding: 0 10px;
-    }
+  padding: 0 37px;
+  margin: 40px auto 75px;
+  @media (max-width: 768px) {
+    margin-top: 30px;
+    padding: 0 10px;
+  }
 }
 
 .button-row {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 4px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
 
+  button {
+    min-width: 92px;
+  }
+
+  &.is-small {
     button {
-        min-width: 92px;
+      padding: 8px 12px;
     }
-
-    &.is-small{
-        button{
-            padding: 8px 12px;
-        }
-    }
+  }
 }
 
-.flat-button{
-    color: white;
-    padding: 14px 16px;
-    cursor: pointer;
-    border: none;
-    background: #FF9517;
-    border: 1px solid #FF9517;
-    border-radius: 4px;
-    margin-right: 4px;
+.flat-button {
+  color: white;
+  padding: 14px 16px;
+  cursor: pointer;
+  border: none;
+  background: #ff9517;
+  border: 1px solid #ff9517;
+  border-radius: 4px;
+  margin-right: 4px;
 
-    i {
-        margin: 0 4px;
-    }
+  i {
+    margin: 0 4px;
+  }
 
-    &.bordered{
-        background: #191c21;
-    }
+  &.bordered {
+    background: #191c21;
+  }
 
-    &.is-small{
-        padding: 8px 12px;
-    }
+  &.is-small {
+    padding: 8px 12px;
+  }
 }
 
-.submit-button, .push-button, .pop-button, .copy-button {
-    border: 1px solid #FF9517;
-    padding: 4px;
-    border-radius: 4px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    color: #ccc;
-    background: #191C21;
-    gap: 4px;
-    &:hover {
-        background: #FF9517;
-    }
+.submit-button,
+.push-button,
+.pop-button,
+.copy-button {
+  border: 1px solid #ff9517;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #ccc;
+  background: #191c21;
+  gap: 4px;
+  &:hover {
+    background: #ff9517;
+  }
 
-    &.is-small{
-        padding: 8px 12px;
-    }
+  &.is-small {
+    padding: 8px 12px;
+  }
 }
 
 input:invalid {
-    background-color: lightpink;
+  background-color: lightpink;
 }
 
-input[type="radio"]{
-    accent-color: #FF9517;
+input[type="radio"] {
+  accent-color: #ff9517;
 }
 
-.input{
-    background: #191c21;
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: 4px;
-    padding: 6px 12px;
-    color: white;
-    width: 600px;
+.input {
+  background: #191c21;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 6px 12px;
+  color: white;
+  width: 600px;
 
-    &:focus-visible{
-        outline: none;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-    }
+  &:focus-visible {
+    outline: none;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
 }
