@@ -22,6 +22,9 @@ pub fn highlight_code(code: &str) -> String {
     let mut in_line_comment = false;
     let mut string_delimiter = '"';
     let mut buffer = String::new();
+    let mut expect_fn_name = false; // after seeing `fn`, next identifier is a function name
+
+    let is_ident_char = |c: char| c.is_alphanumeric() || c == '_';
 
     while let Some(ch) = chars.next() {
         if in_line_comment {
@@ -107,9 +110,48 @@ pub fn highlight_code(code: &str) -> String {
         }
 
         // Check if we're building a word
-        if ch.is_alphanumeric() || ch == '_' {
+        if is_ident_char(ch) {
             buffer.push(ch);
         } else {
+            // If we have an identifier in buffer and encounter '::', treat the whole path as namespace
+            if !buffer.is_empty() && ch == ':' && chars.peek() == Some(&':') {
+                let mut path = String::new();
+                path.push_str(&buffer);
+                buffer.clear();
+                // consume the second ':'
+                let _ = chars.next();
+                path.push_str("::");
+                // consume following segments `ident(::ident)*`
+                loop {
+                    // consume identifier chars
+                    while let Some(&c2) = chars.peek() {
+                        if is_ident_char(c2) {
+                            path.push(c2);
+                            let _ = chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    // check for another '::'
+                    let mut it = chars.clone();
+                    if it.next() == Some(':') && it.next() == Some(':') {
+                        // consume both ':' on original iterator
+                        let _ = chars.next();
+                        let _ = chars.next();
+                        path.push_str("::");
+                        continue;
+                    }
+                    break;
+                }
+                // Only color namespaces that start with `jet::`; keep others (e.g., param::) white
+                if path.starts_with("jet::") {
+                    result.push_str(&format!("<span class=\"hl-namespace\">{}</span>", escape_html(&path)));
+                } else {
+                    result.push_str(&escape_html(&path));
+                }
+                continue; // skip default handling of this ':'
+            }
+
             // Process accumulated word
             if !buffer.is_empty() {
                 let word = buffer.as_str();
@@ -119,21 +161,26 @@ pub fn highlight_code(code: &str) -> String {
                     let highlighted = format!("<span class=\"hl-keyword\">{}</span>", escape_html(word));
                     log::debug!("Highlighting keyword: '{}' -> '{}'", word, highlighted);
                     result.push_str(&highlighted);
+                    if word == "fn" { expect_fn_name = true; }
+                } else if expect_fn_name {
+                    // Color the identifier after `fn` as a function name
+                    result.push_str(&format!("<span class=\"hl-function\">{}</span>", escape_html(word)));
+                    expect_fn_name = false;
                 } else if word.starts_with("0x") || word.starts_with("0b") || word.starts_with("0o") {
                     // Number literal
                     result.push_str(&format!("<span class=\"hl-number\">{}</span>", escape_html(word)));
                 } else if word.parse::<f64>().is_ok() || word.parse::<i64>().is_ok() {
                     // Number literal
                     result.push_str(&format!("<span class=\"hl-number\">{}</span>", escape_html(word)));
-                } else if word.starts_with("jet::") || word.contains("::") {
-                    // Namespace/module path
-                    result.push_str(&format!("<span class=\"hl-namespace\">{}</span>", escape_html(word)));
                 } else {
                     // Regular identifier
                     result.push_str(&escape_html(word));
                 }
                 buffer.clear();
             }
+
+            // Special handling: If we just placed a keyword other than `fn`, we should not carry expect_fn_name
+            if ch == '(' || ch == '{' || ch == ';' || ch == '\n' { expect_fn_name = false; }
 
             // Handle operators and punctuation
             match ch {
@@ -163,6 +210,8 @@ pub fn highlight_code(code: &str) -> String {
             let word = buffer.as_str();
             if keywords.contains(&word) {
                 result.push_str(&format!("<span class=\"hl-keyword\">{}</span>", escape_html(word)));
+            } else if expect_fn_name {
+                result.push_str(&format!("<span class=\"hl-function\">{}</span>", escape_html(word)));
             } else if word.parse::<f64>().is_ok() || word.parse::<i64>().is_ok() {
                 result.push_str(&format!("<span class=\"hl-number\">{}</span>", escape_html(word)));
             } else {

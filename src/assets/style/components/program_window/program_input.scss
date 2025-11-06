@@ -59,7 +59,8 @@
   margin: 0;
   padding: 12px;
   background-color: transparent;
-  color: #fdc667; // Default text color (matches textarea) - spans will override
+  // Default text color for non-token text; token spans override below
+  color: #d4d4d4;
   font-family: "Roboto Mono", monospace;
   font-size: 12px;
   line-height: 1.5;
@@ -95,27 +96,33 @@
 }
 
 // Syntax highlighting colors - must be more specific to override defaults
-.syntax-highlight-overlay :global(.hl-keyword) {
+.syntax-highlight-overlay .hl-keyword {
   color: #c586c0 !important;
 }
 
-.syntax-highlight-overlay :global(.hl-string) {
+.syntax-highlight-overlay .hl-string {
   color: #ce9178 !important;
 }
 
-.syntax-highlight-overlay :global(.hl-comment) {
+.syntax-highlight-overlay .hl-comment {
   color: #6a9955 !important;
   font-style: italic;
 }
 
-.syntax-highlight-overlay :global(.hl-number) {
+.syntax-highlight-overlay .hl-number {
   color: #b5cea8 !important;
 }
 
-.syntax-highlight-overlay :global(.hl-operator) {
+.syntax-highlight-overlay .hl-operator {
   color: #d4d4d4 !important;
 }
 
-.syntax-highlight-overlay :global(.hl-namespace) {
+.syntax-highlight-overlay .hl-namespace {
   color: #4ec9b0 !important;
+}
+
+// Functions (names after `fn`)
+.syntax-highlight-overlay .hl-function {
+  color: #4ec9b0 !important;
+  font-weight: 500;
 }

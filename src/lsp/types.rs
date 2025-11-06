@@ -135,6 +135,8 @@ pub struct ServerCapabilities {
     pub hover_provider: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition_provider: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_tokens_provider: Option<SemanticTokensOptions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +144,41 @@ pub struct ServerCapabilities {
 pub struct CompletionOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_characters: Option<Vec<String>>,
+}
+
+// ============================================================================
+// LSP Semantic Tokens
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticTokensOptions {
+    pub legend: SemanticTokensLegend,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticTokensLegend {
+    pub token_types: Vec<String>,
+    pub token_modifiers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticTokensParams {
+    pub text_document: TextDocumentIdentifier,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticTokens {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_id: Option<String>,
+    pub data: Vec<u32>,
 }
 
 // ============================================================================

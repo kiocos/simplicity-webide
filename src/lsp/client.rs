@@ -7,6 +7,25 @@ use leptos::*;
 use std::collections::HashMap;
 use wasm_bindgen_futures::spawn_local;
 
+// For compatibility with different LSP encodings of semantic tokens
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticTokenObj {
+    delta_line: u32,
+    delta_start: u32,
+    length: u32,
+    token_type: u32,
+    token_modifiers_bitset: u32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticTokensObj {
+    #[allow(dead_code)]
+    result_id: Option<String>,
+    data: Vec<SemanticTokenObj>,
+}
+
 #[derive(Debug, Clone)]
 enum PendingRequest {
     Completion,
@@ -14,6 +33,7 @@ enum PendingRequest {
     Hover,
     #[allow(dead_code)]
     Definition,
+    SemanticTokens(String), // uri
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +79,7 @@ pub struct LspClient {
     completions: RwSignal<Vec<CompletionItem>>,
     hover_info: RwSignal<Option<Hover>>,
     pending_requests: RwSignal<HashMap<i32, PendingRequest>>,
+    semantic_html: RwSignal<HashMap<String, String>>, // uri -> html overlay
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +101,7 @@ impl LspClient {
             completions: create_rw_signal(Vec::new()),
             hover_info: create_rw_signal(None),
             pending_requests: create_rw_signal(HashMap::new()),
+            semantic_html: create_rw_signal(HashMap::new()),
         }
     }
 
@@ -87,6 +109,7 @@ impl LspClient {
         self.state.read_only()
     }
 
+    #[allow(dead_code)]
     pub fn diagnostics(&self) -> ReadSignal<HashMap<String, Vec<Diagnostic>>> {
         self.diagnostics.read_only()
     }
@@ -102,6 +125,10 @@ impl LspClient {
 
     pub fn hover_info(&self) -> ReadSignal<Option<Hover>> {
         self.hover_info.read_only()
+    }
+
+    pub fn semantic_html(&self) -> ReadSignal<HashMap<String, String>> {
+        self.semantic_html.read_only()
     }
 
     pub async fn connect(&self, url: &str) -> Result<(), LspClientError> {
@@ -242,6 +269,32 @@ impl LspClient {
                                 }
                             } else {
                                 log::warn!("Completion response has no result");
+                            }
+                        }
+                        PendingRequest::SemanticTokens(uri) => {
+                            if let Some(result) = &response.result {
+                                if let Ok(tokens) = serde_json::from_value::<SemanticTokens>(result.clone()) {
+                                    if let Some(doc) = self.documents.get_untracked().get(&uri) {
+                                        let html = build_html_from_semantic_tokens(&doc.content, &tokens);
+                                        self.semantic_html.update(|m| { m.insert(uri.clone(), html); });
+                                    }
+                                } else if let Ok(obj) = serde_json::from_value::<SemanticTokensObj>(result.clone()) {
+                                    let mut flat: Vec<u32> = Vec::with_capacity(obj.data.len() * 5);
+                                    for t in obj.data {
+                                        flat.push(t.delta_line);
+                                        flat.push(t.delta_start);
+                                        flat.push(t.length);
+                                        flat.push(t.token_type);
+                                        flat.push(t.token_modifiers_bitset);
+                                    }
+                                    let tokens = SemanticTokens { result_id: None, data: flat };
+                                    if let Some(doc) = self.documents.get_untracked().get(&uri) {
+                                        let html = build_html_from_semantic_tokens(&doc.content, &tokens);
+                                        self.semantic_html.update(|m| { m.insert(uri.clone(), html); });
+                                    }
+                                } else {
+                                    log::warn!("Unexpected semantic tokens result shape: {:?}", result);
+                                }
                             }
                         }
                         PendingRequest::Hover => {
@@ -430,12 +483,15 @@ impl LspClient {
                 uri.clone(),
                 DocumentState {
                     version: 1,
-                    content,
+                    content: content.clone(),
                 },
             );
         });
 
         log::debug!("Opened document: {}", uri);
+
+        // Request initial semantic tokens
+        let _ = self.request_semantic_tokens(uri);
 
         Ok(())
     }
@@ -481,6 +537,9 @@ impl LspClient {
 
         log::debug!("Changed document: {} (version {})", uri, version);
 
+        // Request updated semantic tokens
+        let _ = self.request_semantic_tokens(uri);
+
         Ok(())
     }
 
@@ -518,6 +577,33 @@ impl LspClient {
         Ok(())
     }
 
+    pub fn request_semantic_tokens(&self, uri: String) -> Result<(), LspClientError> {
+        if self.state.get_untracked() != ConnectionState::Initialized {
+            return Err(LspClientError::NotInitialized);
+        }
+
+        let params = SemanticTokensParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+        };
+
+        let request_id = self.next_id();
+        let request = JsonRpcMessage::Request(JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: request_id,
+            method: "textDocument/semanticTokens/full".to_string(),
+            params: serde_json::to_value(params)
+                .map_err(|e| LspClientError::SerializationError(e.to_string()))?,
+        });
+
+        self.pending_requests
+            .update(|r| {
+                r.insert(request_id, PendingRequest::SemanticTokens(uri.clone()));
+            });
+
+        self.send_message(&request)?;
+        Ok(())
+    }
+
     pub fn request_hover(&self, uri: String, position: Position) -> Result<(), LspClientError> {
         if self.state.get_untracked() != ConnectionState::Initialized {
             return Err(LspClientError::NotInitialized);
@@ -548,6 +634,7 @@ impl LspClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn request_definition(
         &self,
         uri: String,
@@ -575,6 +662,7 @@ impl LspClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn disconnect(&self) {
         self.sender.set(None);
         self.state.set(ConnectionState::Disconnected);
@@ -587,4 +675,122 @@ impl Default for LspClient {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ----------------------------------------------------------------------------
+// Semantic tokens HTML generator (keeps in sync with server legend ordering)
+// ----------------------------------------------------------------------------
+
+// Map token type index to CSS class used by the overlay
+fn token_type_to_class(idx: u32) -> &'static str {
+    match idx {
+        0 => "hl-keyword",
+        1 => "hl-string",
+        2 => "hl-comment",
+        3 => "hl-number",
+        4 => "hl-function",
+        5 => "hl-operator",
+        6 => "hl-namespace",
+        _ => "",
+    }
+}
+
+fn escape_html_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn build_html_from_semantic_tokens(text: &str, tokens: &SemanticTokens) -> String {
+    // Decode delta-encoded tokens into absolute (line, start, len, type)
+    let mut decoded: Vec<(u32, u32, u32, u32)> = Vec::with_capacity(tokens.data.len() / 5);
+    let mut line = 0u32;
+    let mut col = 0u32;
+    let mut i = 0usize;
+    let d = &tokens.data;
+    while i + 4 < d.len() {
+        let delta_line = d[i];
+        let delta_start = d[i + 1];
+        let length = d[i + 2];
+        let token_type = d[i + 3];
+        // let modifiers = d[i + 4];
+        if delta_line > 0 {
+            line += delta_line;
+            col = 0;
+        }
+        col = col.saturating_add(delta_start);
+        decoded.push((line, col, length, token_type));
+        i += 5;
+    }
+
+    // Group tokens by line
+    let mut by_line: std::collections::HashMap<u32, Vec<(u32, u32, u32)>> = std::collections::HashMap::new();
+    for (l, s, len, ty) in decoded {
+        by_line.entry(l).or_default().push((s, len, ty));
+    }
+    for vec in by_line.values_mut() {
+        vec.sort_by_key(|(s, _len, _ty)| *s);
+    }
+
+    let mut result = String::with_capacity(text.len() * 2);
+    crate::logging::log_event(
+        "LSP_TOKENS",
+        serde_json::json!({
+            "text_lines": text.lines().count(),
+            "token_lines": by_line.len(),
+        }),
+    );
+    // Use lines() to avoid producing a spurious trailing empty line entry
+    let lines: Vec<&str> = text.lines().collect();
+    let last_idx = lines.len().saturating_sub(1);
+    for (line_idx, line_text) in lines.iter().enumerate() {
+        let mut cursor: usize = 0;
+        let line_u32 = line_idx as u32;
+        if let Some(toks) = by_line.get(&line_u32) {
+            for (start, len, ty) in toks.iter().copied() {
+                let start_usize = start as usize;
+                let end_usize = start_usize.saturating_add(len as usize);
+                if start_usize > cursor && start_usize <= line_text.len() {
+                    result.push_str(&escape_html_text(&line_text[cursor..start_usize]));
+                }
+                if start_usize < line_text.len() {
+                    let end = end_usize.min(line_text.len());
+                    let class = token_type_to_class(ty);
+                    if !class.is_empty() {
+                        result.push_str("<span class=\"");
+                        result.push_str(class);
+                        result.push_str("\">");
+                        result.push_str(&escape_html_text(&line_text[start_usize..end]));
+                        result.push_str("</span>");
+                    } else {
+                        result.push_str(&escape_html_text(&line_text[start_usize..end]));
+                    }
+                    cursor = end;
+                }
+            }
+        }
+        if cursor < line_text.len() {
+            result.push_str(&escape_html_text(&line_text[cursor..]));
+        }
+        if line_idx < last_idx {
+            result.push('\n');
+        }
+    }
+
+    // Preserve all trailing newlines exactly as in the source text
+    let trailing_nl = text.chars().rev().take_while(|&c| c == '\n').count();
+    for _ in 0..trailing_nl {
+        result.push('\n');
+    }
+
+    result
 }

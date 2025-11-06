@@ -1,4 +1,5 @@
 mod components;
+mod logging;
 mod examples;
 mod function;
 mod jet;

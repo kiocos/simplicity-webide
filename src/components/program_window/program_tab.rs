@@ -176,8 +176,11 @@ pub fn ProgramTab() -> impl IntoView {
     let lsp_client_for_hover_tooltip = lsp_client.clone();
     let lsp_client_for_filtering = lsp_client.clone();
     let lsp_client_for_completion_request = lsp_client.clone();
+    let lsp_client_for_completion_request_key = lsp_client.clone();
     let lsp_client_for_dropdown_check = lsp_client.clone();
     let textarea_ref = create_node_ref::<html::Textarea>();
+    let line_numbers_ref = create_node_ref::<html::Div>();
+    let highlight_overlay_ref = create_node_ref::<html::Pre>();
 
     // Completion state
     let show_completions = create_rw_signal(false);
@@ -363,18 +366,90 @@ pub fn ProgramTab() -> impl IntoView {
         log::warn!("LSP client is NOT available");
     }
 
+    // Track typing activity to prefer fast local highlighting while user is typing
+    let typing_debounce_token = create_rw_signal(0u64);
+    let typing_active = create_rw_signal(false);
+    // Keep textarea text visible while overlay is being refreshed (prevents "invisible" gap)
+    let overlay_dirty = create_rw_signal(false);
+
     let lsp_for_update = lsp_client.clone();
     let update_program_text = move |event: ev::Event| {
         let new_text = event_target_value(&event);
         program.text.set(new_text.clone());
+
+        // Debug: log current input/update metrics
+        let lines = new_text.matches('\n').count() + 1;
+        if let Some(el) = textarea_ref.get() {
+            let st = el.scroll_top();
+            let sl = el.scroll_left();
+            let ss = el.selection_start().ok().flatten().unwrap_or_default();
+        crate::logging::log_event(
+            "INPUT",
+            serde_json::json!({
+                "len": new_text.len(),
+                "lines": lines,
+                "sel_start": ss,
+                "scroll_top": st,
+                "scroll_left": sl,
+            }),
+        );
+        } else {
+            crate::logging::log_event(
+                "INPUT_NO_TA",
+                serde_json::json!({"len": new_text.len(), "lines": lines}),
+            );
+        }
+
+        // Next-tick overlay update and scroll sync to avoid flicker on newlines
+        // Schedule after layout so textarea scroll position is final
+        let textarea_ref_clone2 = textarea_ref.clone();
+        let highlight_overlay_ref_clone2 = highlight_overlay_ref.clone();
+        let new_text_clone = new_text.clone();
+        spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(0).await;
+            if let Some(highlight) = highlight_overlay_ref_clone2.get_untracked() {
+                // Fast local highlight while typing
+                let html = highlight_code(&new_text_clone);
+                let overlay_lines = html.matches('\n').count() + 1;
+                crate::logging::log_event(
+                    "OVERLAY_NEXT_TICK",
+                    serde_json::json!({"lines": overlay_lines}),
+                );
+                highlight.set_inner_html(&html);
+                if let Some(textarea) = textarea_ref_clone2.get_untracked() {
+                    let _ = highlight.set_scroll_top(textarea.scroll_top());
+                    let _ = highlight.set_scroll_left(textarea.scroll_left());
+                    crate::logging::log_event(
+                        "OVERLAY_NEXT_TICK_SCROLL",
+                        serde_json::json!({
+                            "top": textarea.scroll_top(),
+                            "left": textarea.scroll_left()
+                        }),
+                    );
+                }
+            }
+        });
+
+        // Mark typing as active and debounce turning it off
+        typing_active.set(true);
+        typing_debounce_token.update(|t| *t += 1);
+        let token = typing_debounce_token.get_untracked();
+        let typing_active_setter = typing_active.clone();
+        spawn_local(async move {
+            // 200ms idle threshold to exit typing mode
+            gloo_timers::future::TimeoutFuture::new(200).await;
+            if typing_debounce_token.get_untracked() == token {
+                typing_active_setter.set(false);
+            }
+        });
 
         // Send LSP update (debouncing handled by gloo_timers)
         if let Some(lsp) = lsp_for_update.as_ref() {
             let lsp = lsp.clone();
             let uri = document_uri.to_string();
             spawn_local(async move {
-                // Wait 300ms before sending update to avoid spamming LSP server
-                gloo_timers::future::TimeoutFuture::new(300).await;
+                // Wait 400ms before sending update to avoid spamming LSP server
+                gloo_timers::future::TimeoutFuture::new(400).await;
                 log::info!("Sending did_change to LSP for: {}", uri);
                 if let Err(e) = lsp.did_change(uri.clone(), new_text) {
                     log::warn!("Failed to update document in LSP: {}", e);
@@ -500,6 +575,16 @@ pub fn ProgramTab() -> impl IntoView {
         let is_completions_shown = show_completions.get_untracked();
         let key = event.key();
 
+        if key == "Enter" {
+            if let Some(el) = textarea_ref.get() {
+                let st = el.scroll_top();
+                let ss = el.selection_start().ok().flatten().unwrap_or_default();
+                log::info!("KEYDOWN: Enter sel_start={} scroll_top={}", ss, st);
+            } else {
+                log::info!("KEYDOWN: Enter");
+            }
+        }
+
         // Handle bracket auto-completion before other handlers
         if !is_completions_shown {
             let bracket_pairs = [
@@ -609,9 +694,10 @@ pub fn ProgramTab() -> impl IntoView {
                     let selected_idx = selected_completion_index.get_untracked();
                 if let Some(item) = filtered_items.get(selected_idx) {
                         let label = item.label.clone();
-                    // Close dropdown FIRST before updating text to prevent effect from interfering
-                    show_completions.set(false);
-                    completion_trigger_pos.set(None);
+                        crate::logging::log_event("COMPLETION_ACCEPT", serde_json::json!({"label": label}));
+                        // Close dropdown FIRST before updating text to prevent effect from interfering
+                        show_completions.set(false);
+                        completion_trigger_pos.set(None);
                         // Insert at cursor
                         if let Some(element) = textarea_ref.get() {
                             if let Ok(Some(start)) = element.selection_start() {
@@ -623,6 +709,53 @@ pub fn ProgramTab() -> impl IntoView {
                                     });
                                     let new_pos = start + label.len() as u32;
                                     let _ = element.set_selection_range(new_pos, new_pos);
+
+                                    // Immediately refresh overlay with local highlight
+                                    overlay_dirty.set(true);
+                                    if let Some(overlay) = highlight_overlay_ref.get_untracked() {
+                                        let html = highlight_code(&program.text.get_untracked());
+                                        overlay.set_inner_html(&html);
+                                        if let Some(ta) = textarea_ref.get_untracked() {
+                                            let _ = overlay.set_scroll_top(ta.scroll_top());
+                                            let _ = overlay.set_scroll_left(ta.scroll_left());
+                                        }
+                                    }
+                                    // Queue a next-tick refresh to catch layout
+                                    {
+                                        let highlight_ref = highlight_overlay_ref.clone();
+                                        let textarea_ref_clone = textarea_ref.clone();
+                                        let text_snapshot = program.text.get_untracked();
+                                        spawn_local(async move {
+                                            gloo_timers::future::TimeoutFuture::new(0).await;
+                                            if let Some(overlay) = highlight_ref.get_untracked() {
+                                                let html = highlight_code(&text_snapshot);
+                                                overlay.set_inner_html(&html);
+                                                if let Some(ta) = textarea_ref_clone.get_untracked() {
+                                                    let _ = overlay.set_scroll_top(ta.scroll_top());
+                                                    let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                }
+                                            }
+                                            // Overlay updated; clear dirty flag
+                                            overlay_dirty.set(false);
+                                        });
+                                    }
+
+                                    // Debounced didChange to LSP post-completion
+                                    if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
+                                        let lsp = lsp.clone();
+                                        let uri = document_uri.to_string();
+                                        let text_for_lsp = program.text.get_untracked();
+                                        spawn_local(async move {
+                                            gloo_timers::future::TimeoutFuture::new(300).await;
+                                            crate::logging::log_event(
+                                                "LSP_DID_CHANGE_AFTER_COMPLETION",
+                                                serde_json::json!({"uri": uri}),
+                                            );
+                                            if let Err(e) = lsp.did_change(uri, text_for_lsp) {
+                                                log::warn!("Failed to update document in LSP after completion: {}", e);
+                                            }
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -647,7 +780,7 @@ pub fn ProgramTab() -> impl IntoView {
         } else if event.ctrl_key() && event.key_code() == SPACE_KEY {
             event.prevent_default();
             // Trigger completion
-            if let Some(lsp) = lsp_client_for_completion_request.as_ref() {
+            if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
                 if let Some(element) = textarea_ref.get() {
                     if let Ok(Some(cursor_pos)) = element.selection_start() {
                         let cursor_pos_usize = cursor_pos as usize;
@@ -714,8 +847,6 @@ pub fn ProgramTab() -> impl IntoView {
     });
 
     // Sync line numbers and highlight overlay scroll with textarea scroll
-    let line_numbers_ref = create_node_ref::<html::Div>();
-    let highlight_overlay_ref = create_node_ref::<html::Pre>();
     let handle_scroll = move |_| {
         if let Some(textarea) = textarea_ref.get() {
             let scroll_top = textarea.scroll_top();
@@ -727,47 +858,76 @@ pub fn ProgramTab() -> impl IntoView {
                 let _ = highlight.set_scroll_top(scroll_top);
                 let _ = highlight.set_scroll_left(scroll_left);
             }
+            log::debug!("SCROLL: textarea top={} left={}", scroll_top, scroll_left);
         }
     };
     
     // Create memoized highlighted code
+    // - While typing, prefer fast local highlighter to keep UI snappy
+    // - When idle, use LSP semantic tokens overlay if available
     let highlighted_code = create_memo(move |_| {
         let text = program.text.get();
+        if typing_active.get() {
+            return highlight_code(&text);
+        }
+        if let Some(lsp) = lsp_client.as_ref() {
+            let map = lsp.semantic_html().get();
+            if let Some(html) = map.get(document_uri) {
+                let text_lines = text.matches('\n').count() + 1;
+                let html_lines = html.matches('\n').count() + 1;
+                if html_lines == text_lines {
+                    return html.clone();
+                } else {
+                    log::debug!("LSP HTML line mismatch: html_lines={} text_lines={}", html_lines, text_lines);
+                }
+            }
+        }
         highlight_code(&text)
     });
     
     // Update the overlay's innerHTML when highlighted code changes
+    // Throttle overlay DOM updates to avoid expensive innerHTML sets on every keystroke
+    let is_updating = create_rw_signal(false);
+    let pending_html = create_rw_signal::<Option<String>>(None);
     create_effect(move |_| {
-        let html = highlighted_code.get();
-        
-        // Debug: Log a sample of the HTML to see if spans are being created
-        let sample = if html.len() > 200 {
-            format!("{}...", &html[..200])
-        } else {
-            html.clone()
-        };
-        log::info!("Highlighted HTML sample (first 200 chars): {}", sample);
-        log::info!("Full HTML length: {}, contains 'hl-keyword': {}", html.len(), html.contains("hl-keyword"));
-        
-        // Try to set immediately, and also schedule a check
-        if let Some(element) = highlight_overlay_ref.get() {
-            log::info!("Setting highlight overlay HTML immediately, length: {}", html.len());
-            element.set_inner_html(&html);
-            log::info!("HTML set successfully");
-        } else {
-            log::warn!("Highlight overlay element not found, will retry");
-            // Element not ready yet, try again after a tick
-            let highlight_ref = highlight_overlay_ref.clone();
-            let html_clone = html.clone(); // Clone the HTML string for the async block
-            spawn_local(async move {
-                gloo_timers::future::TimeoutFuture::new(10).await;
-                if let Some(element) = highlight_ref.get() {
-                    log::info!("Setting highlight overlay HTML (delayed), length: {}", html_clone.len());
-                    element.set_inner_html(&html_clone);
-                    log::info!("HTML set successfully (delayed)");
-                } else {
-                    log::warn!("Highlight overlay element still not found after delay");
+        // While typing, overlay is updated directly in input handler to prevent flicker
+        if typing_active.get() {
+                    crate::logging::log_event("OVERLAY_EFFECT_SKIP_TYPING", serde_json::json!({}));
+                    return;
                 }
+        let html = highlighted_code.get();
+        pending_html.set(Some(html));
+
+        if !is_updating.get_untracked() {
+            is_updating.set(true);
+            let is_updating_flag = is_updating.clone();
+            let highlight_ref = highlight_overlay_ref.clone();
+            let textarea_ref_clone = textarea_ref.clone();
+            spawn_local(async move {
+                // Batch updates ~60fps
+                gloo_timers::future::TimeoutFuture::new(16).await;
+                if let Some(element) = highlight_ref.get_untracked() {
+                    if let Some(html) = pending_html.get_untracked() {
+                        let lines = html.matches('\n').count() + 1;
+                        crate::logging::log_event(
+                            "OVERLAY_THROTTLED",
+                            serde_json::json!({"lines": lines}),
+                        );
+                        element.set_inner_html(&html);
+                        if let Some(textarea) = textarea_ref_clone.get_untracked() {
+                            let _ = element.set_scroll_top(textarea.scroll_top());
+                            let _ = element.set_scroll_left(textarea.scroll_left());
+                            crate::logging::log_event(
+                                "OVERLAY_THROTTLED_SCROLL",
+                                serde_json::json!({
+                                    "top": textarea.scroll_top(),
+                                    "left": textarea.scroll_left()
+                                }),
+                            );
+                        }
+                    }
+                }
+                is_updating_flag.set(false);
             });
         }
     });
@@ -1107,6 +1267,7 @@ pub fn ProgramTab() -> impl IntoView {
                     on:mouseleave=handle_mouse_leave
                     node_ref=textarea_ref
                     name="program-input"
+                    style:color="transparent"
                 >
                     {program.text.get_untracked()}
                 </textarea>
@@ -1144,6 +1305,8 @@ pub fn ProgramTab() -> impl IntoView {
             // Show completion dropdown when triggered
             {
                 move || {
+                    // Clone handles inside the Fn closure so inner handlers can move them without making this FnOnce
+                    let lsp_for_completion_handler = lsp_client_for_completion_request.clone();
                     let should_show = show_completions.get();
                     log::debug!("Completion dropdown check: show={}", should_show);
                     if should_show {
@@ -1177,7 +1340,11 @@ pub fn ProgramTab() -> impl IntoView {
                                         selected_index=selected_completion_index
                                         on_select=move |label: String| {
                                             // Insert completion at cursor
-                                            if let Some(element) = textarea_ref.get() {
+                                            crate::logging::log_event(
+                                                "COMPLETION_ACCEPT",
+                                                serde_json::json!({"label": label}),
+                                            );
+                                            if let Some(element) = textarea_ref.get_untracked() {
                                                 if let Ok(Some(start)) = element.selection_start() {
                                                     if let Ok(Some(end)) = element.selection_end() {
                                                         let start_pos = start as usize;
@@ -1187,11 +1354,55 @@ pub fn ProgramTab() -> impl IntoView {
                                                         });
                                                         let new_pos = start + label.len() as u32;
                                                         let _ = element.set_selection_range(new_pos, new_pos);
+
+                                                        // Immediately refresh overlay with local highlight (no extra keystroke needed)
+                                                        if let Some(overlay) = highlight_overlay_ref.get_untracked() {
+                                                            let html = crate::components::program_window::syntax_highlighter::highlight_code(&program.text.get_untracked());
+                                                            overlay.set_inner_html(&html);
+                                                            if let Some(ta) = textarea_ref.get_untracked() {
+                                                                let _ = overlay.set_scroll_top(ta.scroll_top());
+                                                                let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                            }
+                                                        }
+                                                        // Also queue a next-tick refresh to catch any layout changes
+                                                        {
+                                                            let highlight_ref = highlight_overlay_ref.clone();
+                                                            let textarea_ref_clone = textarea_ref.clone();
+                                                            let text_snapshot = program.text.get_untracked();
+                                                            spawn_local(async move {
+                                                                gloo_timers::future::TimeoutFuture::new(0).await;
+                                                                if let Some(overlay) = highlight_ref.get_untracked() {
+                                                                    let html = crate::components::program_window::syntax_highlighter::highlight_code(&text_snapshot);
+                                                                    overlay.set_inner_html(&html);
+                                                                    if let Some(ta) = textarea_ref_clone.get_untracked() {
+                                                                        let _ = overlay.set_scroll_top(ta.scroll_top());
+                                                                        let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                                    }
+                                                                }
+                                                            });
+                                                        }
+
+                                                        // Debounced didChange to LSP for completions insertion
+                                                        if let Some(lsp) = lsp_for_completion_handler.as_ref() {
+                                                            let lsp = lsp.clone();
+                                                            let uri = document_uri.to_string();
+                                                            let text_for_lsp = program.text.get_untracked();
+                                                            spawn_local(async move {
+                                                                gloo_timers::future::TimeoutFuture::new(300).await;
+                                                                crate::logging::log_event(
+                                                                    "LSP_DID_CHANGE_AFTER_COMPLETION",
+                                                                    serde_json::json!({"uri": uri}),
+                                                                );
+                                                                if let Err(e) = lsp.did_change(uri, text_for_lsp) {
+                                                                    log::warn!("Failed to update document in LSP after completion: {}", e);
+                                                                }
+                                                            });
+                                                        }
                                                     }
                                                 }
                                             }
                                             show_completions.set(false);
-                                    completion_trigger_pos.set(None);
+                                            completion_trigger_pos.set(None);
                                         }
                                         position=completion_position.get()
                                     />
