@@ -184,8 +184,12 @@ pub fn highlight_code(code: &str) -> String {
                 '+' | '-' | '*' | '/' | '%' | '=' | '!' | '<' | '>' | '&' | '|' | '^' | '~' | '?' | ':' => {
                     result.push_str(&format!("<span class=\"hl-operator\">{}</span>", escape_char(ch)));
                 }
-                '.' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '@' | '#' => {
-                    result.push(escape_char(ch));
+                '(' | ')' | '[' | ']' | '{' | '}' => {
+                    // Brackets and parentheses - render directly without escaping
+                    result.push(ch);
+                }
+                '.' | ',' | ';' | '@' | '#' => {
+                    result.push(ch);
                 }
                 '\n' | '\r' | '\t' | ' ' => {
                     result.push(ch);
