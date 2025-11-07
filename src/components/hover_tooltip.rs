@@ -1,3 +1,4 @@
+use crate::components::markdown_parser::parse_markdown;
 use crate::lsp::{Hover, MarkupContent};
 use leptos::*;
 
@@ -18,15 +19,14 @@ pub fn HoverTooltip(
                     let content = match &h.contents {
                         MarkupContent { kind, value } => {
                             if kind == "markdown" {
-                                // For now, display as plain text
-                                // Could be enhanced with a markdown renderer
+                                // Parse markdown and render as HTML
+                                let html = parse_markdown(value);
                                 view! {
-                                    <div class="hover-content markdown">
-                                        <pre>{value.clone()}</pre>
-                                    </div>
+                                    <div class="hover-content markdown" inner_html=html></div>
                                 }
                                 .into_view()
                             } else {
+                                // Plain text - escape HTML and preserve whitespace
                                 view! {
                                     <div class="hover-content">
                                         <pre>{value.clone()}</pre>

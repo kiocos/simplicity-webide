@@ -5,6 +5,7 @@ mod copy_to_clipboard;
 mod dropdown;
 mod footer;
 mod hover_tooltip;
+mod markdown_parser;
 mod lsp_debug;
 mod lsp_status;
 mod navbar;

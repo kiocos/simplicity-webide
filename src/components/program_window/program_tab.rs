@@ -397,6 +397,7 @@ pub fn ProgramTab() -> impl IntoView {
     let hover_error_diagnostics = create_rw_signal::<Option<Vec<crate::lsp::Diagnostic>>>(None);
     let hover_debounce_timer = create_rw_signal(0);
     let current_hover_word = create_rw_signal(Option::<(u32, u32)>::None); // Track (line, character) of current hover word
+    let hover_info_word = create_rw_signal(Option::<(u32, u32)>::None); // Track which word the current hover_info corresponds to
     
     // Function signature tooltip state (for Ctrl+Space inside function parentheses)
     let show_signature_tooltip = create_rw_signal(false);
@@ -1894,9 +1895,13 @@ pub fn ProgramTab() -> impl IntoView {
             let hover_info = lsp.hover_info();
             let has_hover_data = hover_info.get().is_some();
             let current_word = current_hover_word.get();
+            let info_word = hover_info_word.get();
             
-            // Only show hover if we have data and we're still hovering over the same word
-            if has_hover_data && current_word.is_some() {
+            // Only show hover if:
+            // 1. We have hover data
+            // 2. We're still hovering over a word
+            // 3. The hover_info corresponds to the current word (not a stale one)
+            if has_hover_data && current_word.is_some() && current_word == info_word {
                 show_hover.set(true);
             } else {
                 show_hover.set(false);
@@ -1995,6 +2000,8 @@ pub fn ProgramTab() -> impl IntoView {
                 if !is_same_word {
                     // New word - update tracking and hide hover until new data arrives (unless we have errors)
                     current_hover_word.set(Some(new_word_pos));
+                    // Clear the hover_info_word to indicate we're waiting for new data
+                    hover_info_word.set(None);
                     // Only hide hover if we don't have error diagnostics
                     if hover_error_diagnostics.get_untracked().is_none() {
                     show_hover.set(false); // Hide until new hover data arrives
@@ -2013,6 +2020,7 @@ pub fn ProgramTab() -> impl IntoView {
                 let position = Position { line, character };
                 let hover_debounce_timer_clone = hover_debounce_timer;
                 let current_hover_word_clone = current_hover_word;
+                let hover_info_word_clone = hover_info_word.clone();
                 
                 // Debounce hover requests (200ms - reduced for better responsiveness)
                 spawn_local(async move {
@@ -2025,9 +2033,13 @@ pub fn ProgramTab() -> impl IntoView {
                             .unwrap_or(false);
                             
                             if still_on_same_word {
+                                // Mark that we're requesting hover for this word
+                                hover_info_word_clone.set(Some((position.line, position.character)));
                                 // Request hover info from LSP
                                 if let Err(e) = lsp.request_hover(doc_uri, position) {
                                     log::warn!("Failed to request hover: {}", e);
+                                    // Clear hover_info_word on error so we don't show stale data
+                                    hover_info_word_clone.set(None);
                                 }
                             }
                         }
@@ -2042,6 +2054,7 @@ pub fn ProgramTab() -> impl IntoView {
         hover_error_diagnostics.set(None);
         show_hover.set(false);
         current_hover_word.set(None);
+        hover_info_word.set(None); // Clear hover info word tracking
         hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
         // Don't clear signature tooltip on mouse leave - it's triggered by Ctrl+Space, not mouse
     };
