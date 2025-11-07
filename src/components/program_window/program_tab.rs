@@ -1340,17 +1340,60 @@ pub fn ProgramTab() -> impl IntoView {
                     
                     // Not inside function parentheses - show normal completion dropdown
                     if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
-                        // Calculate line and character from cursor position
+                        // Find the start of the last identifier segment being typed
+                        // For "jet::bi", we want to filter by "bi", not "jet::bi"
+                        // This allows filtering to work correctly when Ctrl+Space is pressed
+                        let is_ident_char = |c: char| c.is_alphanumeric() || c == '_';
+                        let mut word_start = cursor_pos_usize;
+                        let mut found_segment_start = false;
+                        
+                        // Iterate backwards to find the start of the current identifier segment
+                        // This finds "bi" in "jet::bi" (starts right after "jet::")
+                        let chars_before: Vec<(usize, char)> = text[..cursor_pos_usize]
+                            .char_indices()
+                            .collect();
+                        
+                        for (idx, (i, ch)) in chars_before.iter().enumerate().rev() {
+                            if is_ident_char(*ch) {
+                                word_start = *i;
+                                found_segment_start = true;
+                            } else if *ch == ':' {
+                                // Check if this is part of "::" (path separator)
+                                if idx > 0 && chars_before[idx - 1].1 == ':' {
+                                    // Found "::" - word_start is already at the start of current segment
+                                    // (right after "::")
+                                    break;
+                                } else {
+                                    // Single ':', not part of path - break
+                                    if found_segment_start {
+                                        break;
+                                    }
+                                    word_start = cursor_pos_usize; // No identifier found
+                                    break;
+                                }
+                            } else {
+                                // Hit non-identifier character
+                                if found_segment_start {
+                                    break;
+                                }
+                                word_start = cursor_pos_usize; // No identifier found
+                                break;
+                            }
+                        }
+                        
+                        // Calculate line and character from cursor position (for LSP request)
                         let before_cursor = &text[..cursor_pos_usize];
                         let line = before_cursor.matches('\n').count() as u32;
                         let line_start = before_cursor.rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let character = (cursor_pos_usize - line_start) as u32;
 
                         let position = Position { line, character };
-                        log::info!("Requesting completion at line {}, char {}", line, character);
+                        log::info!("Requesting completion at line {}, char {} (word starts at {})", line, character, word_start);
 
-                        // Store the trigger position for filtering
-                        completion_trigger_pos.set(Some(cursor_pos_usize));
+                        // Store the trigger position at the start of the word for filtering
+                        // This ensures that if the user typed "jet::bi" and pressed Ctrl+Space,
+                        // the dropdown will be filtered to show only items starting with "bi"
+                        completion_trigger_pos.set(Some(word_start));
 
                         // Calculate pixel position for dropdown (approximate)
                         // This uses fixed positioning based on the textarea's typical location
