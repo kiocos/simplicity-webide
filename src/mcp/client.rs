@@ -168,12 +168,42 @@ impl MCPClient {
                     log::info!("Tool call response received");
                 }
                 PendingRequest::Chat => {
-                    if let Some(result) = response.result {
-                        if let Ok(chat_response) = serde_json::from_value::<ChatResponse>(result) {
+                    if let Some(error) = response.error {
+                        // Handle error response
+                        let error_content = format!("Error: {} (code: {})", error.message, error.code);
+                        let error_response = ChatResponse {
+                            role: "assistant".to_string(),
+                            content: error_content,
+                            tool_used: None,
+                        };
+                        self.chat_responses.update(|responses| {
+                            responses.insert(response.id, error_response);
+                        });
+                        log::warn!("Chat error response received: {}", error.message);
+                    } else if let Some(result) = response.result {
+                        if let Ok(chat_response) = serde_json::from_value::<ChatResponse>(result.clone()) {
+                            let tool_used = chat_response.tool_used.clone();
+                            let response_id = response.id;
                             self.chat_responses.update(|responses| {
-                                responses.insert(response.id, chat_response);
+                                responses.insert(response_id, chat_response);
                             });
-                            log::info!("Chat response received");
+                            log::info!("Chat response received (tool: {:?})", tool_used);
+                        } else {
+                            // Try to extract content directly if ChatResponse parsing fails
+                            log::warn!("Failed to parse chat response, trying direct extraction");
+                            let result_clone = result.clone();
+                            if let Some(content_str) = result_clone.get("content").and_then(|v| v.as_str()) {
+                                let tool_used = result_clone.get("tool_used").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                let fallback_response = ChatResponse {
+                                    role: "assistant".to_string(),
+                                    content: content_str.to_string(),
+                                    tool_used,
+                                };
+                                let response_id = response.id;
+                                self.chat_responses.update(|responses| {
+                                    responses.insert(response_id, fallback_response);
+                                });
+                            }
                         }
                     }
                 }

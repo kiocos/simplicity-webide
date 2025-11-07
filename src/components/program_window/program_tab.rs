@@ -18,6 +18,7 @@ use crate::components::program_window::syntax_highlighter::highlight_code;
 use crate::function::Runner;
 use crate::lsp::{ConnectionState, LspClient, Position};
 use crate::mcp::{MCPClient, ChatMessage};
+use serde_json;
 use wasm_bindgen::JsCast;
 
 #[derive(Copy, Clone, Debug)]
@@ -166,6 +167,79 @@ impl Runtime {
 const TAB_KEY: u32 = 9;
 const ENTER_KEY: u32 = 13;
 const SPACE_KEY: u32 = 32;
+
+/// Format chat response content - intelligently format JSON responses
+fn format_chat_response(content: &str) -> String {
+    // Try to parse as JSON
+    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(content) {
+        // Handle specific response formats from mcp-bridge
+        if let Some(obj) = json_value.as_object() {
+            // Check if it's a suggestions/help response
+            if obj.contains_key("message") && obj.contains_key("suggestions") {
+                let message = obj.get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("I can help you with Simplicity contracts.");
+                
+                let suggestions = obj.get("suggestions")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                
+                let mut formatted = message.to_string();
+                if !suggestions.is_empty() {
+                    formatted.push_str("\n\nYou can ask me to:\n");
+                    for suggestion in suggestions.iter() {
+                        formatted.push_str(&format!("  • {}\n", suggestion));
+                    }
+                }
+                return formatted;
+            }
+            
+            // For other JSON objects, try to format them nicely
+            // Extract common fields and format them
+            if let Some(message) = obj.get("message").and_then(|v| v.as_str()) {
+                let mut formatted = message.to_string();
+                
+                // Add other relevant fields
+                if let Some(suggestions) = obj.get("suggestions").and_then(|v| v.as_array()) {
+                    if !suggestions.is_empty() {
+                        formatted.push_str("\n\nSuggestions:\n");
+                        for sug in suggestions.iter() {
+                            if let Some(s) = sug.as_str() {
+                                formatted.push_str(&format!("  • {}\n", s));
+                            }
+                        }
+                    }
+                }
+                
+                // Add error if present
+                if let Some(error) = obj.get("error").and_then(|v| v.as_str()) {
+                    formatted.push_str(&format!("\n\nError: {}", error));
+                }
+                
+                // Add success status if present
+                if let Some(success) = obj.get("success").and_then(|v| v.as_bool()) {
+                    if !success {
+                        formatted.push_str("\n\n❌ Operation failed");
+                    }
+                }
+                
+                return formatted;
+            }
+        }
+        
+        // For other JSON, pretty-print it
+        if let Ok(formatted) = serde_json::to_string_pretty(&json_value) {
+            return formatted;
+        }
+    }
+    // If not JSON or formatting failed, return as-is
+    content.to_string()
+}
 
 #[component]
 pub fn ProgramTab() -> impl IntoView {
@@ -329,6 +403,44 @@ pub fn ProgramTab() -> impl IntoView {
     let chat_input = create_rw_signal(String::new());
     let chat_input_ref = create_node_ref::<html::Textarea>();
     let pending_chat_request = create_rw_signal(Option::<i32>::None);
+    
+    // Effect to watch for chat responses and process them reactively
+    if let Some(mcp) = mcp_client.as_ref() {
+        let mcp_clone = mcp.clone();
+        let chat_messages_for_effect = chat_messages.clone();
+        let pending_chat_request_for_effect = pending_chat_request.clone();
+        
+        create_effect(move |_| {
+            // Track chat_responses signal to trigger when responses arrive
+            let responses = mcp_clone.chat_responses();
+            let pending_id = pending_chat_request_for_effect.get();
+            
+            if let Some(request_id) = pending_id {
+                responses.with(|responses_map| {
+                    if let Some(response) = responses_map.get(&request_id) {
+                        // Format the response content
+                        let formatted_content = format_chat_response(&response.content);
+                        
+                        // Add tool info if available and not empty
+                        let final_content = if let Some(ref tool) = response.tool_used {
+                            if !tool.is_empty() {
+                                format!("{}\n\n_Used tool: `{}`_", formatted_content, tool)
+                            } else {
+                                formatted_content
+                            }
+                        } else {
+                            formatted_content
+                        };
+                        
+                        chat_messages_for_effect.update(|messages| {
+                            messages.push(("assistant".to_string(), final_content));
+                        });
+                        pending_chat_request_for_effect.set(None);
+                    }
+                });
+            }
+        });
+    }
 
     // Document URI for LSP
     let document_uri = "file:///main.simf";
@@ -1391,37 +1503,28 @@ pub fn ProgramTab() -> impl IntoView {
                     Ok(request_id) => {
                         pending_chat_request_for_send.set(Some(request_id));
                         
-                        // Poll for response
-                        let mcp_clone = mcp.clone();
-                        let request_id_clone = request_id;
-                        let chat_messages_clone = chat_messages_for_send.clone();
+                        // Set timeout fallback
+                        let chat_messages_timeout = chat_messages_for_send.clone();
+                        let pending_chat_request_timeout = pending_chat_request_for_send.clone();
                         spawn_local(async move {
-                            // Wait a bit for response
-                            gloo_timers::future::TimeoutFuture::new(100).await;
+                            gloo_timers::future::TimeoutFuture::new(30000).await; // 30 second timeout
                             
-                            // Check for response multiple times
-                            for _ in 0..50 {
-                                if let Some(response) = mcp_clone.get_chat_response(request_id_clone) {
-                                    chat_messages_clone.update(|messages| {
-                                        messages.push(("assistant".to_string(), response.content));
-                                    });
-                                    pending_chat_request_for_send.set(None);
-                                    return;
-                                }
-                                gloo_timers::future::TimeoutFuture::new(100).await;
+                            // Check if still pending
+                            if pending_chat_request_timeout.get().is_some() {
+                                chat_messages_timeout.update(|messages| {
+                                    messages.push(("assistant".to_string(), 
+                                        "⏱️ Request timed out. The server may be taking longer than expected.".to_string()));
+                                });
+                                pending_chat_request_timeout.set(None);
                             }
-                            
-                            // Timeout
-                            chat_messages_clone.update(|messages| {
-                                messages.push(("assistant".to_string(), "Timeout waiting for response".to_string()));
-                            });
-                            pending_chat_request_for_send.set(None);
                         });
                     }
                     Err(e) => {
                         chat_messages_for_send.update(|messages| {
-                            messages.push(("assistant".to_string(), format!("Error: {}", e)));
+                            messages.push(("assistant".to_string(), 
+                                format!("❌ Error sending message: {}", e)));
                         });
+                        pending_chat_request_for_send.set(None);
                     }
                 }
             });
