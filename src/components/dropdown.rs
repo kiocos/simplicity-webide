@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use leptos::{component, ev, view, CollectView, IntoView, View};
+use leptos::{component, create_rw_signal, ev, view, CollectView, IntoView, SignalGet, SignalSet, View};
 
 #[component]
 pub fn Dropdown(
@@ -8,19 +8,42 @@ pub fn Dropdown(
     #[prop(into)] options: Rc<[&'static str]>,
     select_option: impl Fn(&'static str) + Copy + 'static,
 ) -> impl IntoView {
+    let is_open = create_rw_signal(false);
+    
     let options_view = move || -> View {
         options
             .iter()
             .map(|name| {
+                let select_fn = select_option;
+                let is_open_clone = is_open.clone();
                 view! {
-                    <Option name=name select_option=select_option />
+                    <Option 
+                        name=name 
+                        select_option=move |selected| {
+                            select_fn(selected);
+                            is_open_clone.set(false); // Close dropdown after selection
+                        }
+                    />
                 }
             })
             .collect_view()
     };
 
+    let handle_mouse_enter = move |_| {
+        is_open.set(true);
+    };
+
+    let handle_mouse_leave = move |_| {
+        is_open.set(false);
+    };
+
     view! {
-        <div class="dropdown">
+        <div 
+            class="dropdown"
+            class:dropdown-open=move || is_open.get()
+            on:mouseenter=handle_mouse_enter
+            on:mouseleave=handle_mouse_leave
+        >
             <button class="button dropdown-button">
                 {name}" "
                 <i class="dropdown-chevron">
@@ -29,7 +52,10 @@ pub fn Dropdown(
                     </svg>
                 </i>
             </button>
-            <div class="dropdown-content">
+            <div 
+                class="dropdown-content"
+                class:dropdown-open=move || is_open.get()
+            >
                 {options_view}
             </div>
         </div>
