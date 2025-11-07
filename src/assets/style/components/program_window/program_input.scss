@@ -33,15 +33,7 @@
   }
 }
 
-.editor-container {
-  display: flex;
-  position: relative;
-  width: 100%;
-  background-color: helpers.$background-dark;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 7.5px;
-  overflow: hidden;
-}
+// .editor-container styles moved to chat.scss for layout control
 
 .editor-wrapper {
   position: relative;

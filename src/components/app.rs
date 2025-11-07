@@ -9,6 +9,7 @@ use crate::components::run_window::{HashCount, KeyCount, RunWindow, SignedData, 
 use crate::components::state::LocalStorage;
 use crate::examples;
 use crate::lsp::LspClient;
+use crate::mcp::MCPClient;
 use crate::transaction::TxParams;
 use crate::util::{HashedData, SigningKeys};
 
@@ -42,6 +43,21 @@ pub fn App() -> impl IntoView {
             // Continue without LSP - the app should still work
         } else {
             log::info!("Successfully connected to LSP server");
+        }
+    });
+
+    // Initialize MCP client
+    let mcp_client = MCPClient::new();
+    provide_context(mcp_client.clone());
+
+    // Connect to MCP bridge on startup
+    spawn_local(async move {
+        // Try to connect to local MCP bridge
+        if let Err(e) = mcp_client.connect("ws://127.0.0.1:3001").await {
+            log::warn!("Failed to connect to MCP bridge: {}", e);
+            // Continue without MCP - the app should still work
+        } else {
+            log::info!("Successfully connected to MCP bridge");
         }
     });
 

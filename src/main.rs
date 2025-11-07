@@ -4,6 +4,7 @@ mod examples;
 mod function;
 mod jet;
 mod lsp;
+mod mcp;
 mod transaction;
 mod util;
 

@@ -17,6 +17,7 @@ use crate::components::{CompletionDropdown, HoverTooltip};
 use crate::components::program_window::syntax_highlighter::highlight_code;
 use crate::function::Runner;
 use crate::lsp::{ConnectionState, LspClient, Position};
+use crate::mcp::{MCPClient, ChatMessage};
 use wasm_bindgen::JsCast;
 
 #[derive(Copy, Clone, Debug)]
@@ -171,6 +172,7 @@ pub fn ProgramTab() -> impl IntoView {
     let program = use_context::<Program>().expect("program should exist in context");
     let runtime = use_context::<Runtime>().expect("runtime should exist in context");
     let lsp_client = use_context::<LspClient>();
+    let mcp_client = use_context::<MCPClient>();
     let lsp_client_for_diagnostics = lsp_client.clone();
     let lsp_client_for_hover = lsp_client.clone();
     let lsp_client_for_hover_tooltip = lsp_client.clone();
@@ -321,6 +323,12 @@ pub fn ProgramTab() -> impl IntoView {
     let hover_position = create_rw_signal((0.0, 0.0));
     let hover_debounce_timer = create_rw_signal(0);
     let current_hover_word = create_rw_signal(Option::<(u32, u32)>::None); // Track (line, character) of current hover word
+
+    // Chat state
+    let chat_messages = create_rw_signal::<Vec<(String, String)>>(Vec::new()); // (role, content)
+    let chat_input = create_rw_signal(String::new());
+    let chat_input_ref = create_node_ref::<html::Textarea>();
+    let pending_chat_request = create_rw_signal(Option::<i32>::None);
 
     // Document URI for LSP
     let document_uri = "file:///main.simf";
@@ -1208,6 +1216,93 @@ pub fn ProgramTab() -> impl IntoView {
         hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
     };
 
+    // Chat handlers
+    let mcp_client_for_chat = mcp_client.clone();
+    let program_for_chat = program.clone();
+    let chat_messages_for_send = chat_messages.clone();
+    let chat_input_for_send = chat_input.clone();
+    let pending_chat_request_for_send = pending_chat_request.clone();
+    
+    let send_chat_message = move |_| {
+        let message = chat_input.get_untracked();
+        if message.trim().is_empty() {
+            return;
+        }
+
+        if let Some(mcp) = mcp_client_for_chat.as_ref() {
+            let mcp = mcp.clone();
+            let program_text = program_for_chat.text.get_untracked();
+            
+            // Add user message to chat
+            chat_messages_for_send.update(|messages| {
+                messages.push(("user".to_string(), message.clone()));
+            });
+            
+            // Clear input
+            chat_input_for_send.set(String::new());
+            if let Some(input) = chat_input_ref.get() {
+                let _ = input.set_value("");
+            }
+
+            // Send to MCP
+            let messages: Vec<ChatMessage> = chat_messages_for_send.get_untracked()
+                .iter()
+                .map(|(role, content)| ChatMessage {
+                    role: role.clone(),
+                    content: content.clone(),
+                })
+                .collect();
+
+            spawn_local(async move {
+                match mcp.send_chat(messages, Some(program_text)).await {
+                    Ok(request_id) => {
+                        pending_chat_request_for_send.set(Some(request_id));
+                        
+                        // Poll for response
+                        let mcp_clone = mcp.clone();
+                        let request_id_clone = request_id;
+                        let chat_messages_clone = chat_messages_for_send.clone();
+                        spawn_local(async move {
+                            // Wait a bit for response
+                            gloo_timers::future::TimeoutFuture::new(100).await;
+                            
+                            // Check for response multiple times
+                            for _ in 0..50 {
+                                if let Some(response) = mcp_clone.get_chat_response(request_id_clone) {
+                                    chat_messages_clone.update(|messages| {
+                                        messages.push(("assistant".to_string(), response.content));
+                                    });
+                                    pending_chat_request_for_send.set(None);
+                                    return;
+                                }
+                                gloo_timers::future::TimeoutFuture::new(100).await;
+                            }
+                            
+                            // Timeout
+                            chat_messages_clone.update(|messages| {
+                                messages.push(("assistant".to_string(), "Timeout waiting for response".to_string()));
+                            });
+                            pending_chat_request_for_send.set(None);
+                        });
+                    }
+                    Err(e) => {
+                        chat_messages_for_send.update(|messages| {
+                            messages.push(("assistant".to_string(), format!("Error: {}", e)));
+                        });
+                    }
+                }
+            });
+        }
+    };
+
+    let send_chat_message_clone = send_chat_message.clone();
+    let handle_chat_keydown = move |event: ev::KeyboardEvent| {
+        if event.key() == "Enter" && !event.shift_key() {
+            event.prevent_default();
+            send_chat_message_clone(ev::MouseEvent::new("click").unwrap());
+        }
+    };
+
     view! {
         <div class="tab-content">
             <div class="copy-program">
@@ -1215,35 +1310,45 @@ pub fn ProgramTab() -> impl IntoView {
                     <i class="far fa-copy"></i>
                 </CopyToClipboard>
             </div>
-            <div class="editor-container">
-                <div class="line-numbers" node_ref=line_numbers_ref>
-                    {move || line_numbers.get()}
+            <div class="program-layout">
+            <div class="editor-wrapper-container">
+                <div class="editor-container">
+                    <div class="line-numbers" node_ref=line_numbers_ref>
+                        {move || line_numbers.get()}
+                    </div>
+                    <div class="editor-wrapper">
+                        <pre
+                            class="syntax-highlight-overlay"
+                            node_ref=highlight_overlay_ref
+                        />
+                    <textarea
+                        class="program-input-field"
+                        placeholder="Enter your program here"
+                        rows="25"
+                        cols="80"
+                        spellcheck="false"
+                        wrap="off"
+                        prop:value=program.text
+                        on:input=update_program_text
+                        on:keydown=handle_keydown
+                        on:scroll=handle_scroll
+                        on:mousemove=handle_mouse_move
+                        on:mouseleave=handle_mouse_leave
+                        node_ref=textarea_ref
+                        name="program-input"
+                        style:color="transparent"
+                    >
+                        {program.text.get_untracked()}
+                    </textarea>
+                    </div>
                 </div>
-                <div class="editor-wrapper">
-                    <pre
-                        class="syntax-highlight-overlay"
-                        node_ref=highlight_overlay_ref
-                    />
-                <textarea
-                    class="program-input-field"
-                    placeholder="Enter your program here"
-                    rows="25"
-                    cols="80"
-                    spellcheck="false"
-                    wrap="off"
-                    prop:value=program.text
-                    on:input=update_program_text
-                    on:keydown=handle_keydown
-                    on:scroll=handle_scroll
-                    on:mousemove=handle_mouse_move
-                    on:mouseleave=handle_mouse_leave
-                    node_ref=textarea_ref
-                    name="program-input"
-                    style:color="transparent"
-                >
-                    {program.text.get_untracked()}
-                </textarea>
-                </div>
+
+                // Display LSP diagnostics below the editor
+                {lsp_client_for_diagnostics.as_ref().map(|_| view! {
+                    <div class="lsp-diagnostics">
+                        <DiagnosticsList uri=document_uri />
+                    </div>
+                })}
             </div>
 
             // Show hover tooltip when hovering
@@ -1382,12 +1487,68 @@ pub fn ProgramTab() -> impl IntoView {
                 }
             }
 
-            // Display LSP diagnostics below the editor
-            {lsp_client_for_diagnostics.as_ref().map(|_| view! {
-                <div class="lsp-diagnostics">
-                    <DiagnosticsList uri=document_uri />
+            // Chat panel
+            <div class="chat-container">
+                <div class="chat-header">
+                    <h3>"AI Assistant"</h3>
+                    {move || {
+                        mcp_client.as_ref().map(|mcp| {
+                            let state = mcp.state();
+                            view! {
+                                <span class="chat-status">
+                                    {match state.get() {
+                                        crate::mcp::client::MCPConnectionState::Connected => "🟢",
+                                        crate::mcp::client::MCPConnectionState::Connecting => "🟡",
+                                        _ => "🔴",
+                                    }}
+                                </span>
+                            }
+                        })
+                    }}
                 </div>
-            })}
+                <div class="chat-messages">
+                    {move || {
+                        chat_messages.get().into_iter().map(|(role, content)| {
+                            let role_class = if role == "user" { "chat-message-user" } else { "chat-message-assistant" };
+                            view! {
+                                <div class=format!("chat-message {}", role_class)>
+                                    <div class="chat-message-content">{content}</div>
+                                </div>
+                            }
+                        }).collect::<Vec<_>>()
+                    }}
+                    {move || {
+                        if pending_chat_request.get().is_some() {
+                            Some(view! {
+                                <div class="chat-message chat-message-assistant">
+                                    <div class="chat-message-content">"Thinking..."</div>
+                                </div>
+                            })
+                        } else {
+                            None
+                        }
+                    }}
+                </div>
+                <div class="chat-input-container">
+                    <textarea
+                        class="chat-input"
+                        placeholder="Ask me about Simplicity contracts..."
+                        rows="3"
+                        prop:value=chat_input
+                        on:input=move |e| chat_input.set(event_target_value(&e))
+                        on:keydown=handle_chat_keydown
+                        node_ref=chat_input_ref
+                    />
+                    <button
+                        class="chat-send-button"
+                        on:click=send_chat_message
+                        disabled=move || pending_chat_request.get().is_some() || chat_input.get().trim().is_empty()
+                    >
+                        "Send"
+                    </button>
+                </div>
+            </div>
+            </div>
         </div>
     }
 }
