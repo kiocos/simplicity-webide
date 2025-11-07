@@ -721,6 +721,99 @@ pub fn ProgramTab() -> impl IntoView {
         let key = event.key();
 
         if key == "Enter" {
+            // Handle auto-indentation when Enter is pressed (only if completions are not shown)
+            if !is_completions_shown {
+                if let Some(element) = textarea_ref.get() {
+                    if let Ok(Some(cursor_pos)) = element.selection_start() {
+                        let cursor_pos_usize = cursor_pos as usize;
+                        let text = program.text.get_untracked();
+                        
+                        // Find the start of the current line
+                        let line_start = text[..cursor_pos_usize]
+                            .rfind('\n')
+                            .map(|pos| pos + 1)
+                            .unwrap_or(0);
+                        
+                        // Get the current line content up to the cursor
+                        let current_line = &text[line_start..cursor_pos_usize];
+                        
+                        // Calculate indentation (count leading spaces or tabs)
+                        let mut indent = String::new();
+                        for ch in current_line.chars() {
+                            if ch == ' ' || ch == '\t' {
+                                indent.push(ch);
+                            } else {
+                                break;
+                            }
+                        }
+                        
+                        // If the line ends with an opening brace, add an extra level of indentation
+                        let trimmed_line = current_line.trim();
+                        if trimmed_line.ends_with('{') || trimmed_line.ends_with('(') || trimmed_line.ends_with('[') {
+                            // Add one more level of indentation (use spaces, assuming 4 spaces per indent)
+                            indent.push_str("    ");
+                        }
+                        
+                        // Insert newline + indentation
+                        event.prevent_default();
+                        let newline_with_indent = format!("\n{}", indent);
+                        
+                        if let Some(new_text) = insert_text_at_cursor(&text, &newline_with_indent) {
+                            program.text.set(new_text.clone());
+                            
+                            // Position cursor after the indentation
+                            let new_cursor_pos = cursor_pos_usize + newline_with_indent.len();
+                            let _ = element.set_selection_range(new_cursor_pos as u32, new_cursor_pos as u32);
+                            
+                            // Immediately update overlay with error indicators
+                            overlay_update_in_progress.set(true);
+                            if let Some(overlay) = highlight_overlay_ref.get_untracked() {
+                                let mut html = highlight_code(&new_text);
+                                // Apply error indicators if diagnostics are available
+                                if let Some(lsp) = lsp_client_for_brackets.as_ref() {
+                                    let diagnostics = lsp.get_diagnostics_for_uri(&document_uri_for_brackets);
+                                    html = add_error_indicators(&html, &diagnostics);
+                                }
+                                overlay.set_inner_html(&html);
+                                if let Some(ta) = textarea_ref.get_untracked() {
+                                    let _ = overlay.set_scroll_top(ta.scroll_top());
+                                    let _ = overlay.set_scroll_left(ta.scroll_left());
+                                }
+                            }
+                            overlay_update_in_progress.set(false);
+                            
+                            // Mark typing as active
+                            typing_active.set(true);
+                            typing_debounce_token.update(|t| *t += 1);
+                            let token = typing_debounce_token.get_untracked();
+                            let typing_active_setter = typing_active.clone();
+                            spawn_local(async move {
+                                gloo_timers::future::TimeoutFuture::new(200).await;
+                                if typing_debounce_token.get_untracked() == token {
+                                    typing_active_setter.set(false);
+                                }
+                            });
+                            
+                            // Send LSP update (debounced)
+                            if let Some(lsp) = lsp_client_for_brackets.as_ref() {
+                                let lsp = lsp.clone();
+                                let uri = document_uri_for_brackets.clone();
+                                let text_for_lsp = new_text.clone();
+                                spawn_local(async move {
+                                    gloo_timers::future::TimeoutFuture::new(400).await;
+                                    if let Err(e) = lsp.did_change(uri, text_for_lsp) {
+                                        log::warn!("Failed to update document in LSP: {}", e);
+                                    }
+                                });
+                            }
+                            
+                            return;
+                        }
+                    }
+                }
+            }
+            
+            // Log Enter key for debugging (if not handled above)
             if let Some(el) = textarea_ref.get() {
                 let st = el.scroll_top();
                 let ss = el.selection_start().ok().flatten().unwrap_or_default();
