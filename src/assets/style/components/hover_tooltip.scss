@@ -90,4 +90,34 @@
       }
     }
   }
+
+  // Signature tooltip styling (for function signatures)
+  &.signature-tooltip {
+    background-color: #1e2a35;
+    border: 1px solid #4ec9b0;
+    border-left: 3px solid #4ec9b0;
+
+    &::before {
+      border-bottom-color: #4ec9b0;
+    }
+
+    &::after {
+      border-bottom-color: #1e2a35;
+    }
+
+    .signature-content {
+      color: #4ec9b0;
+      font-weight: 500;
+
+      pre {
+        margin: 0;
+        padding: 0;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        font-family: inherit;
+        font-size: inherit;
+        line-height: 1.5;
+      }
+    }
+  }
 }

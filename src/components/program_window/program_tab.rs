@@ -397,6 +397,11 @@ pub fn ProgramTab() -> impl IntoView {
     let hover_error_diagnostics = create_rw_signal::<Option<Vec<crate::lsp::Diagnostic>>>(None);
     let hover_debounce_timer = create_rw_signal(0);
     let current_hover_word = create_rw_signal(Option::<(u32, u32)>::None); // Track (line, character) of current hover word
+    
+    // Function signature tooltip state (for Ctrl+Space inside function parentheses)
+    let show_signature_tooltip = create_rw_signal(false);
+    let signature_tooltip_position = create_rw_signal((0.0, 0.0));
+    let signature_content = create_rw_signal::<Option<String>>(None);
 
     // Chat state
     let chat_messages = create_rw_signal::<Vec<(String, String)>>(Vec::new()); // (role, content)
@@ -495,6 +500,10 @@ pub fn ProgramTab() -> impl IntoView {
     let lsp_client_for_brackets_outer = lsp_client.clone();
     let lsp_client_for_memo_outer = lsp_client.clone();
     let update_program_text = move |event: ev::Event| {
+        // Hide signature tooltip when user starts typing
+        show_signature_tooltip.set(false);
+        signature_content.set(None);
+        
         let new_text = event_target_value(&event);
         program.text.set(new_text.clone());
 
@@ -708,6 +717,175 @@ pub fn ProgramTab() -> impl IntoView {
                 }
             }
         }
+        None
+    };
+    
+    // Helper function to extract function signature from hover content
+    // Tries to extract just the signature (parameters) from the full hover documentation
+    let extract_signature_from_hover = |hover_content: &str| -> String {
+        // Try to find code blocks first (markdown format)
+        if let Some(start) = hover_content.find("```") {
+            if let Some(end) = hover_content[start + 3..].find("```") {
+                let code_block = &hover_content[start + 3..start + 3 + end];
+                // Remove language identifier (e.g., "rust\n")
+                let code = code_block.lines().skip(1).collect::<Vec<_>>().join("\n");
+                // Extract just the function signature line (usually the first line)
+                if let Some(sig_line) = code.lines().next() {
+                    // Look for the function signature pattern: fn name(...) or pub fn name(...)
+                    if sig_line.contains("fn ") {
+                        // Extract from "fn" to the end of the function signature
+                        // This typically includes: fn name(param1: Type1, param2: Type2) -> ReturnType
+                        if let Some(fn_pos) = sig_line.find("fn ") {
+                            let sig = &sig_line[fn_pos..];
+                            // Take up to the first newline or end of line
+                            return sig.trim().to_string();
+                        }
+                    }
+                }
+                return code.trim().to_string();
+            }
+        }
+        
+        // If no code block, try to find function signature pattern directly
+        if let Some(fn_pos) = hover_content.find("fn ") {
+            // Extract from "fn" to the end of the signature (usually ends with `)` or `->`)
+            let after_fn = &hover_content[fn_pos..];
+            // Find the end of the signature - look for `)` followed by `->` or end of line
+            let mut sig_end = after_fn.len();
+            let mut paren_count = 0;
+            let mut found_paren = false;
+            
+            for (i, ch) in after_fn.char_indices() {
+                match ch {
+                    '(' => {
+                        paren_count += 1;
+                        found_paren = true;
+                    }
+                    ')' => {
+                        paren_count -= 1;
+                        if paren_count == 0 && found_paren {
+                            // Check if there's a return type
+                            if let Some(arrow_pos) = after_fn[i + 1..].find("->") {
+                                sig_end = i + 1 + arrow_pos + 2;
+                                // Include return type - find end of return type
+                                let after_arrow = &after_fn[sig_end..];
+                                // Return type usually ends at newline, space, or end
+                                if let Some(rt_end) = after_arrow.find('\n') {
+                                    sig_end += rt_end;
+                                } else if let Some(rt_end) = after_arrow.find(' ') {
+                                    sig_end += rt_end;
+                                }
+                            } else {
+                                sig_end = i + 1;
+                            }
+                            break;
+                        }
+                    }
+                    '\n' if !found_paren => {
+                        // If we haven't found opening paren yet, this might be the end
+                        sig_end = i;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            
+            let signature = &after_fn[..sig_end.min(after_fn.len())];
+            return signature.trim().to_string();
+        }
+        
+        // Fallback: return first line or first 200 characters
+        hover_content.lines().next().unwrap_or(hover_content).trim().to_string()
+    };
+    
+    // Helper function to check if cursor is inside function parentheses and extract function name
+    let find_function_name_before_paren = move |text: &str, cursor_pos: usize| -> Option<(usize, usize)> {
+        // Find the opening parenthesis before the cursor
+        let before_cursor = &text[..cursor_pos];
+        
+        // Look backwards for an opening parenthesis
+        let mut paren_pos = None;
+        let mut paren_depth = 0;
+        for (i, ch) in before_cursor.char_indices().rev() {
+            match ch {
+                ')' => paren_depth += 1,
+                '(' => {
+                    if paren_depth == 0 {
+                        paren_pos = Some(i);
+                        break;
+                    }
+                    paren_depth -= 1;
+                }
+                _ => {}
+            }
+        }
+        
+        if let Some(open_paren_pos) = paren_pos {
+            // Check if we're inside this parenthesis (cursor is after the opening paren)
+            if cursor_pos > open_paren_pos {
+                // Find the function name before the opening parenthesis
+                let before_paren = &text[..open_paren_pos];
+                
+                // Skip whitespace before the parenthesis
+                let trimmed = before_paren.trim_end();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                
+                // Find the start of the identifier (function name)
+                // Look backwards for identifier characters (alphanumeric, _, ::)
+                let name_end = trimmed.len();
+                let mut name_start = name_end;
+                
+                // Handle path separators (::)
+                let chars: Vec<char> = trimmed.chars().collect();
+                let mut i = chars.len();
+                while i > 0 {
+                    i -= 1;
+                    let ch = chars[i];
+                    if ch.is_alphanumeric() || ch == '_' {
+                        name_start = i;
+                    } else if ch == ':' && i > 0 && chars[i - 1] == ':' {
+                        // Found ::, continue backwards
+                        if i > 1 {
+                            i -= 1; // Skip the second :
+                            name_start = i;
+                        } else {
+                            break;
+                        }
+                    } else if name_start < name_end {
+                        // We've found the start of the identifier
+                        break;
+                    } else {
+                        // Skip whitespace and other characters
+                        if !ch.is_whitespace() {
+                            break;
+                        }
+                    }
+                }
+                
+                if name_start < name_end {
+                    // Convert char indices to byte positions
+                    let mut byte_start = 0;
+                    let mut byte_end = 0;
+                    for (byte_idx, (char_idx, _)) in trimmed.char_indices().enumerate() {
+                        if char_idx == name_start {
+                            byte_start = byte_idx;
+                        }
+                        if char_idx == name_end {
+                            byte_end = byte_idx;
+                            break;
+                        }
+                    }
+                    if byte_end == 0 {
+                        byte_end = trimmed.len();
+                    }
+                    
+                    return Some((byte_start, byte_end));
+                }
+            }
+        }
+        
         None
     };
 
@@ -972,6 +1150,8 @@ pub fn ProgramTab() -> impl IntoView {
                         crate::logging::log_event("COMPLETION_ACCEPT", serde_json::json!({"label": label}));
                         // Close dropdown FIRST before updating text to prevent effect from interfering
                         show_completions.set(false);
+                        show_signature_tooltip.set(false);
+                        signature_content.set(None);
                         
                         // Find the actual word boundaries to replace
                         completion_trigger_pos.set(None);
@@ -1072,6 +1252,8 @@ pub fn ProgramTab() -> impl IntoView {
                 // Escape
                 event.prevent_default();
                 show_completions.set(false);
+                show_signature_tooltip.set(false);
+                signature_content.set(None);
                 completion_trigger_pos.set(None);
                 return;
             }
@@ -1082,12 +1264,82 @@ pub fn ProgramTab() -> impl IntoView {
             runtime.run();
         } else if event.ctrl_key() && event.key_code() == SPACE_KEY {
             event.prevent_default();
-            // Trigger completion
-            if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
                 if let Some(element) = textarea_ref.get() {
                     if let Ok(Some(cursor_pos)) = element.selection_start() {
                         let cursor_pos_usize = cursor_pos as usize;
                         let text = program.text.get_untracked();
+                    
+                    // First, check if cursor is inside function parentheses
+                    if let Some((func_start, func_end)) = find_function_name_before_paren(&text, cursor_pos_usize) {
+                        // We're inside function parentheses - show signature tooltip
+                        if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
+                            let function_name = &text[func_start..func_end];
+                            log::info!("Found function name: {} at position {}-{}", function_name, func_start, func_end);
+                            
+                            // Calculate position for hover request (at the function name)
+                            let before_func = &text[..func_start];
+                            let line = before_func.matches('\n').count() as u32;
+                            let line_start = before_func.rfind('\n').map(|p| p + 1).unwrap_or(0);
+                            let character = (func_start - line_start) as u32;
+                            
+                            let position = Position { line, character };
+                            
+                            // Calculate tooltip position (near the cursor)
+                            let before_cursor = &text[..cursor_pos_usize];
+                            let cursor_line = before_cursor.matches('\n').count() as u32;
+                            let cursor_line_start = before_cursor.rfind('\n').map(|p| p + 1).unwrap_or(0);
+                            let cursor_character = (cursor_pos_usize - cursor_line_start) as u32;
+                            
+                            let tooltip_x = 150.0 + (cursor_character as f64 * 7.2);
+                            let tooltip_y = 200.0 + (cursor_line as f64 * 18.0);
+                            signature_tooltip_position.set((tooltip_x, tooltip_y));
+                            
+                            // Request hover for the function name
+                            let uri = document_uri.to_string();
+                            
+                            if let Err(e) = lsp.request_hover(uri.clone(), position) {
+                                log::warn!("Failed to request hover for function signature: {}", e);
+                            } else {
+                                // Use a reactive effect to watch for hover response
+                                let lsp_for_effect = lsp.clone();
+                                let signature_content_effect = signature_content.clone();
+                                let show_signature_effect = show_signature_tooltip.clone();
+                                let function_name_clone = function_name.to_string();
+                                
+                                // Create a one-time effect to watch for hover info
+                                spawn_local(async move {
+                                    // Wait a bit for LSP to respond
+                                    gloo_timers::future::TimeoutFuture::new(100).await;
+                                    
+                                    // Check hover info multiple times with small delays
+                                    for _ in 0..10 {
+                                        let hover_info = lsp_for_effect.hover_info().get();
+                                        if let Some(hover) = hover_info {
+                                            // Extract signature from hover content
+                                            let full_content = match &hover.contents {
+                                                crate::lsp::MarkupContent { kind: _, value } => {
+                                                    value.clone()
+                                                }
+                                            };
+                                            // Extract just the function signature (parameters)
+                                            let signature = extract_signature_from_hover(&full_content);
+                                            signature_content_effect.set(Some(signature));
+                                            show_signature_effect.set(true);
+                                            log::info!("Showing signature tooltip for function: {}", function_name_clone);
+                                            return;
+                                        }
+                                        gloo_timers::future::TimeoutFuture::new(50).await;
+                                    }
+                                    log::warn!("No hover information received for function: {}", function_name_clone);
+                                });
+                            }
+                            
+                            return; // Don't show completion dropdown
+                        }
+                    }
+                    
+                    // Not inside function parentheses - show normal completion dropdown
+                    if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
                         // Calculate line and character from cursor position
                         let before_cursor = &text[..cursor_pos_usize];
                         let line = before_cursor.matches('\n').count() as u32;
@@ -1700,25 +1952,25 @@ pub fn ProgramTab() -> impl IntoView {
                 // Only request LSP hover if we don't have error diagnostics on this line
                 // Error tooltips take priority and don't need LSP hover
                 if hover_error_diagnostics.get_untracked().is_none() {
-                    // Debounce: increment timer
-                    let timer_id = hover_debounce_timer.get_untracked() + 1;
-                    hover_debounce_timer.set(timer_id);
+                // Debounce: increment timer
+                let timer_id = hover_debounce_timer.get_untracked() + 1;
+                hover_debounce_timer.set(timer_id);
+                
+                let lsp = lsp.clone();
+                let doc_uri = document_uri.to_string();
+                let position = Position { line, character };
+                let hover_debounce_timer_clone = hover_debounce_timer;
+                let current_hover_word_clone = current_hover_word;
+                
+                // Debounce hover requests (200ms - reduced for better responsiveness)
+                spawn_local(async move {
+                    gloo_timers::future::TimeoutFuture::new(200).await;
                     
-                    let lsp = lsp.clone();
-                    let doc_uri = document_uri.to_string();
-                    let position = Position { line, character };
-                    let hover_debounce_timer_clone = hover_debounce_timer;
-                    let current_hover_word_clone = current_hover_word;
-                    
-                    // Debounce hover requests (200ms - reduced for better responsiveness)
-                    spawn_local(async move {
-                        gloo_timers::future::TimeoutFuture::new(200).await;
-                        
-                        // Only proceed if timer hasn't been reset and we're still on the same word
-                        if hover_debounce_timer_clone.get_untracked() == timer_id {
-                            let still_on_same_word = current_hover_word_clone.get_untracked()
-                                .map(|(l, c)| l == position.line && c == position.character)
-                                .unwrap_or(false);
+                    // Only proceed if timer hasn't been reset and we're still on the same word
+                    if hover_debounce_timer_clone.get_untracked() == timer_id {
+                        let still_on_same_word = current_hover_word_clone.get_untracked()
+                            .map(|(l, c)| l == position.line && c == position.character)
+                            .unwrap_or(false);
                             
                             if still_on_same_word {
                                 // Request hover info from LSP
@@ -1739,6 +1991,7 @@ pub fn ProgramTab() -> impl IntoView {
         show_hover.set(false);
         current_hover_word.set(None);
         hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
+        // Don't clear signature tooltip on mouse leave - it's triggered by Ctrl+Space, not mouse
     };
 
     // Chat handlers
@@ -1894,11 +2147,36 @@ pub fn ProgramTab() -> impl IntoView {
                     }
                 }
             }
+            // Show function signature tooltip when Ctrl+Space is pressed inside function parentheses
+            {
+                move || {
+                    if show_signature_tooltip.get() {
+                        let content = signature_content.get();
+                        if let Some(sig) = content {
+                            let pos = signature_tooltip_position.get();
+                            Some(view! {
+                                <div
+                                    class="hover-tooltip signature-tooltip"
+                                    style=format!("left: {}px; top: {}px;", pos.0, pos.1)
+                                >
+                                    <div class="hover-content signature-content">
+                                        <pre>{sig}</pre>
+                                    </div>
+                                </div>
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+            }
             // Show LSP hover tooltip when hovering
             {
                 move || {
                     // Only show if hover is enabled, completions are not shown, and we have hover data (and no error diagnostics)
-                    if show_hover.get() && !show_completions.get() && hover_error_diagnostics.get().is_none() {
+                    if show_hover.get() && !show_completions.get() && hover_error_diagnostics.get().is_none() && !show_signature_tooltip.get() {
                         lsp_client_for_hover_tooltip.as_ref().and_then(|lsp| {
                             let hover_signal = lsp.hover_info();
                             let hover_data = hover_signal.get();
@@ -2039,6 +2317,8 @@ pub fn ProgramTab() -> impl IntoView {
                                                         }
                                                     
                                             show_completions.set(false);
+                        show_signature_tooltip.set(false);
+                        signature_content.set(None);
                                             completion_trigger_pos.set(None);
                                                 }
                                             }
