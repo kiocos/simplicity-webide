@@ -67,7 +67,7 @@ pub fn App() -> impl IntoView {
 
     view! {
         <Navigation />
-        <LspDebugStatus />
+        // <LspDebugStatus />
         <section class="main-content">
             <ProgramWindow />
             <RunWindow />
