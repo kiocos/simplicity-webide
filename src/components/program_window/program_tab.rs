@@ -535,14 +535,23 @@ pub fn ProgramTab() -> impl IntoView {
             
             // Only proceed if this is still the latest update request
             if typing_debounce_token_clone.get_untracked() == update_token {
-            if let Some(highlight) = highlight_overlay_ref_clone2.get_untracked() {
+                if let Some(highlight) = highlight_overlay_ref_clone2.get_untracked() {
                     overlay_update_in_progress_clone.set(true);
-                // Fast local highlight while typing
-                let html = highlight_code(&new_text_clone);
-                highlight.set_inner_html(&html);
-                if let Some(textarea) = textarea_ref_clone2.get_untracked() {
-                    let _ = highlight.set_scroll_top(textarea.scroll_top());
-                    let _ = highlight.set_scroll_left(textarea.scroll_left());
+                    
+                    // Read the actual textarea value to ensure overlay matches exactly
+                    // This prevents sync issues between textarea and overlay
+                    let text_for_overlay = if let Some(textarea) = textarea_ref_clone2.get_untracked() {
+                        textarea.value()
+                    } else {
+                        new_text_clone
+                    };
+                    
+                    // Fast local highlight while typing - use exact textarea value
+                    let html = highlight_code(&text_for_overlay);
+                    highlight.set_inner_html(&html);
+                    if let Some(textarea) = textarea_ref_clone2.get_untracked() {
+                        let _ = highlight.set_scroll_top(textarea.scroll_top());
+                        let _ = highlight.set_scroll_left(textarea.scroll_left());
                     }
                     overlay_update_in_progress_clone.set(false);
                 }
@@ -1054,11 +1063,29 @@ pub fn ProgramTab() -> impl IntoView {
     // Update idle_text when typing stops
     let idle_text_updater = idle_text.clone();
     let program_text_for_idle = program.text.clone();
+    let typing_active_for_idle = typing_active.clone();
     create_effect(move |_| {
-        let is_typing = typing_active.get();
+        let is_typing = typing_active_for_idle.get();
         if !is_typing {
             // When typing stops, update idle_text to trigger memo recalculation
             idle_text_updater.set(program_text_for_idle.get());
+        }
+    });
+    
+    // Also update idle_text when program.text changes externally (e.g., from example selection)
+    // This ensures the overlay refreshes when examples are selected
+    let idle_text_external = idle_text.clone();
+    let program_text_external = program.text.clone();
+    let typing_active_external = typing_active.clone();
+    create_effect(move |_| {
+        // Track program.text changes
+        let current_text = program_text_external.get();
+        let is_typing = typing_active_external.get_untracked();
+        
+        // Only update if we're not typing (to avoid conflicts with typing updates)
+        if !is_typing {
+            let text_for_idle = current_text.clone();
+            idle_text_external.set(text_for_idle);
         }
     });
     
@@ -1110,6 +1137,56 @@ pub fn ProgramTab() -> impl IntoView {
                     let _ = element.set_scroll_left(textarea.scroll_left());
                 }
             }
+        }
+    });
+    
+    // Force immediate overlay and textarea update when program.text changes externally (e.g., example selection)
+    // This runs after highlighted_code memo is defined
+    let highlight_overlay_ref_force = highlight_overlay_ref.clone();
+    let textarea_ref_force = textarea_ref.clone();
+    let program_text_force = program.text.clone();
+    let typing_active_force = typing_active.clone();
+    let previous_text = create_rw_signal::<Option<String>>(None);
+    create_effect(move |_| {
+        // Track program.text changes
+        let current_text = program_text_force.get();
+        let is_typing = typing_active_force.get_untracked();
+        let prev_text = previous_text.get_untracked();
+        
+        // Only force update if we're not typing and text actually changed (external changes like example selection)
+        if !is_typing && prev_text.as_ref() != Some(&current_text) {
+            previous_text.set(Some(current_text.clone()));
+            
+            // Immediately update textarea value to ensure it's in sync with program.text
+            if let Some(textarea) = textarea_ref_force.get_untracked() {
+                let text_for_textarea = current_text.clone();
+                let _ = textarea.set_value(&text_for_textarea);
+                
+                // Use a microtask to ensure textarea DOM is updated, then read its value
+                // This guarantees the overlay matches the exact textarea content
+                let highlight_ref = highlight_overlay_ref_force.clone();
+                let textarea_clone = textarea_ref_force.clone();
+                spawn_local(async move {
+                    // Use requestAnimationFrame to ensure DOM is updated
+                    gloo_timers::future::TimeoutFuture::new(0).await;
+                    
+                    if let Some(textarea) = textarea_clone.get_untracked() {
+                        // Read the actual textarea value from DOM
+                        let textarea_value = textarea.value();
+                        
+                        // Update overlay with the exact textarea content
+                        if let Some(overlay) = highlight_ref.get_untracked() {
+                            let html = highlight_code(&textarea_value);
+                            overlay.set_inner_html(&html);
+                            let _ = overlay.set_scroll_top(textarea.scroll_top());
+                            let _ = overlay.set_scroll_left(textarea.scroll_left());
+                        }
+                    }
+                });
+            }
+        } else if !is_typing {
+            // Update previous_text even if we don't force update
+            previous_text.set(Some(current_text));
         }
     });
     
