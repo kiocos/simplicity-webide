@@ -245,6 +245,56 @@ fn escape_char(ch: char) -> char {
     ch
 }
 
+/// Add error line indicators to highlighted HTML
+/// Wraps each line in a div with an error class if that line has diagnostics
+pub fn add_error_indicators(html: &str, diagnostics: &[crate::lsp::Diagnostic]) -> String {
+    if diagnostics.is_empty() {
+        return html.to_string();
+    }
+    
+    // Build a set of line numbers that have errors
+    let mut error_lines = std::collections::HashSet::new();
+    for diagnostic in diagnostics {
+        // Only highlight errors (severity 1), not warnings/info/hints
+        if let Some(crate::lsp::DiagnosticSeverity::Error) = diagnostic.severity {
+            // Highlight the entire line range
+            let start_line = diagnostic.range.start.line;
+            let end_line = diagnostic.range.end.line;
+            for line in start_line..=end_line {
+                error_lines.insert(line);
+            }
+        }
+    }
+    
+    if error_lines.is_empty() {
+        return html.to_string();
+    }
+    
+    // Split HTML by newlines and wrap each line
+    let lines: Vec<&str> = html.split('\n').collect();
+    let mut result = String::with_capacity(html.len() + error_lines.len() * 50);
+    
+    for (line_num, line) in lines.iter().enumerate() {
+        let line_index = line_num as u32;
+        if error_lines.contains(&line_index) {
+            // Wrap line in span with error class (display: block to preserve line structure)
+            result.push_str("<span class=\"error-line\">");
+            result.push_str(line);
+            result.push_str("</span>");
+        } else {
+            // Regular line, just add it
+            result.push_str(line);
+        }
+        
+        // Add newline if not the last line
+        if line_num < lines.len() - 1 {
+            result.push('\n');
+        }
+    }
+    
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

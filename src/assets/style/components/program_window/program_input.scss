@@ -118,3 +118,24 @@
   color: #4ec9b0 !important;
   font-weight: 500;
 }
+
+// Error line highlighting
+// Use table display to ensure it takes exactly one line without affecting layout
+.syntax-highlight-overlay .error-line {
+  display: inline-block;
+  table-layout: fixed;
+  width: 100%;
+  background-color: rgba(255, 0, 0, 0.1) !important;
+  box-shadow: inset 3px 0 0 #ff4444;
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.5 !important; // Must match .syntax-highlight-overlay line-height exactly
+  font-size: 12px !important; // Must match overlay font-size
+  box-sizing: border-box;
+  overflow: visible;
+  // Prevent any default browser spacing
+  border: none;
+  outline: none;
+  border-collapse: collapse;
+  border-spacing: 0;
+}

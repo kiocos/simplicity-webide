@@ -3,7 +3,7 @@ use std::sync::Arc;
 use itertools::Itertools;
 use leptos::{
     component, create_effect, create_memo, create_node_ref, create_rw_signal, ev,
-    event_target_value, html, spawn_local, use_context, view, IntoView, RwSignal, Signal,
+    event_target_value, html, spawn_local, use_context, view, CollectView, IntoView, RwSignal, Signal,
     SignalGet, SignalGetUntracked, SignalSet, SignalUpdate, SignalWith, SignalWithUntracked,
 };
 use simplicityhl::parse::ParseFromStr;
@@ -12,9 +12,8 @@ use simplicityhl::{elements, simplicity};
 use simplicityhl::{CompiledProgram, SatisfiedProgram, WitnessValues};
 
 use crate::components::copy_to_clipboard::CopyToClipboard;
-use crate::components::lsp_status::DiagnosticsList;
 use crate::components::{CompletionDropdown, HoverTooltip};
-use crate::components::program_window::syntax_highlighter::highlight_code;
+use crate::components::program_window::syntax_highlighter::{highlight_code, add_error_indicators};
 use crate::function::Runner;
 use crate::lsp::{ConnectionState, LspClient, Position};
 use crate::mcp::{MCPClient, ChatMessage};
@@ -247,7 +246,6 @@ pub fn ProgramTab() -> impl IntoView {
     let runtime = use_context::<Runtime>().expect("runtime should exist in context");
     let lsp_client = use_context::<LspClient>();
     let mcp_client = use_context::<MCPClient>();
-    let lsp_client_for_diagnostics = lsp_client.clone();
     let lsp_client_for_hover = lsp_client.clone();
     let lsp_client_for_hover_tooltip = lsp_client.clone();
     let lsp_client_for_filtering = lsp_client.clone();
@@ -395,6 +393,8 @@ pub fn ProgramTab() -> impl IntoView {
     // Hover state
     let show_hover = create_rw_signal(false);
     let hover_position = create_rw_signal((0.0, 0.0));
+    // Signal to store error diagnostics for the current hover line
+    let hover_error_diagnostics = create_rw_signal::<Option<Vec<crate::lsp::Diagnostic>>>(None);
     let hover_debounce_timer = create_rw_signal(0);
     let current_hover_word = create_rw_signal(Option::<(u32, u32)>::None); // Track (line, character) of current hover word
 
@@ -491,6 +491,9 @@ pub fn ProgramTab() -> impl IntoView {
     let overlay_update_in_progress = create_rw_signal(false);
 
     let lsp_for_update = lsp_client.clone();
+    let lsp_client_for_typing_outer = lsp_client.clone();
+    let lsp_client_for_brackets_outer = lsp_client.clone();
+    let lsp_client_for_memo_outer = lsp_client.clone();
     let update_program_text = move |event: ev::Event| {
         let new_text = event_target_value(&event);
         program.text.set(new_text.clone());
@@ -524,6 +527,8 @@ pub fn ProgramTab() -> impl IntoView {
         let new_text_clone = new_text.clone();
         let overlay_update_in_progress_clone = overlay_update_in_progress.clone();
         let typing_debounce_token_clone = typing_debounce_token.clone();
+        let lsp_client_for_typing = lsp_client_for_typing_outer.clone();
+        let document_uri_for_typing = document_uri.to_string();
         
         // Cancel any pending overlay update and schedule a new one
         typing_debounce_token_clone.update(|t| *t += 1);
@@ -535,7 +540,7 @@ pub fn ProgramTab() -> impl IntoView {
             
             // Only proceed if this is still the latest update request
             if typing_debounce_token_clone.get_untracked() == update_token {
-                if let Some(highlight) = highlight_overlay_ref_clone2.get_untracked() {
+            if let Some(highlight) = highlight_overlay_ref_clone2.get_untracked() {
                     overlay_update_in_progress_clone.set(true);
                     
                     // Read the actual textarea value to ensure overlay matches exactly
@@ -547,11 +552,18 @@ pub fn ProgramTab() -> impl IntoView {
                     };
                     
                     // Fast local highlight while typing - use exact textarea value
-                    let html = highlight_code(&text_for_overlay);
-                    highlight.set_inner_html(&html);
-                    if let Some(textarea) = textarea_ref_clone2.get_untracked() {
-                        let _ = highlight.set_scroll_top(textarea.scroll_top());
-                        let _ = highlight.set_scroll_left(textarea.scroll_left());
+                    let mut html = highlight_code(&text_for_overlay);
+                    
+                    // Apply error indicators if diagnostics are available
+                    if let Some(lsp) = lsp_client_for_typing.as_ref() {
+                        let diagnostics = lsp.get_diagnostics_for_uri(&document_uri_for_typing);
+                        html = add_error_indicators(&html, &diagnostics);
+                    }
+                    
+                highlight.set_inner_html(&html);
+                if let Some(textarea) = textarea_ref_clone2.get_untracked() {
+                    let _ = highlight.set_scroll_top(textarea.scroll_top());
+                    let _ = highlight.set_scroll_left(textarea.scroll_left());
                     }
                     overlay_update_in_progress_clone.set(false);
                 }
@@ -700,8 +712,8 @@ pub fn ProgramTab() -> impl IntoView {
     };
 
     // Clone lsp_client for bracket handler and memo
-    let lsp_client_for_brackets = lsp_client.clone();
-    let lsp_client_for_memo = lsp_client.clone();
+    let lsp_client_for_brackets = lsp_client_for_brackets_outer.clone();
+    let lsp_client_for_memo = lsp_client_for_memo_outer.clone();
     let document_uri_for_brackets = document_uri.to_string();
 
     let handle_keydown = move |event: ev::KeyboardEvent| {
@@ -1096,17 +1108,33 @@ pub fn ProgramTab() -> impl IntoView {
         let text = idle_text.get();
         
         // When idle, try to use LSP semantic tokens if available
-        if let Some(lsp) = lsp_client_for_memo.as_ref() {
+        let html = if let Some(lsp) = lsp_client_for_memo.as_ref() {
             let map = lsp.semantic_html().get();
             if let Some(html) = map.get(document_uri) {
                 let text_lines = text.matches('\n').count() + 1;
                 let html_lines = html.matches('\n').count() + 1;
                 if html_lines == text_lines {
-                    return html.clone();
+                    html.clone()
+                } else {
+                    highlight_code(&text)
                 }
+            } else {
+                highlight_code(&text)
             }
-        }
+        } else {
         highlight_code(&text)
+        };
+        
+        // Apply error indicators if diagnostics are available
+        // Access diagnostics signal directly to make memo reactive to diagnostics changes
+        if let Some(lsp) = lsp_client_for_memo.as_ref() {
+            // Access the diagnostics signal to make the memo track it
+            let diagnostics_map = lsp.diagnostics().get();
+            let diagnostics = diagnostics_map.get(document_uri).cloned().unwrap_or_default();
+            add_error_indicators(&html, &diagnostics)
+        } else {
+            html
+        }
     });
     
     // Update the overlay's innerHTML when highlighted code changes (only when not typing)
@@ -1146,6 +1174,8 @@ pub fn ProgramTab() -> impl IntoView {
     let textarea_ref_force = textarea_ref.clone();
     let program_text_force = program.text.clone();
     let typing_active_force = typing_active.clone();
+    let lsp_client_for_force_spawn = lsp_client.clone();
+    let document_uri_for_force_spawn = document_uri.to_string();
     let previous_text = create_rw_signal::<Option<String>>(None);
     create_effect(move |_| {
         // Track program.text changes
@@ -1166,6 +1196,8 @@ pub fn ProgramTab() -> impl IntoView {
                 // This guarantees the overlay matches the exact textarea content
                 let highlight_ref = highlight_overlay_ref_force.clone();
                 let textarea_clone = textarea_ref_force.clone();
+                let lsp_client_for_force_clone = lsp_client_for_force_spawn.clone();
+                let document_uri_for_force_clone = document_uri_for_force_spawn.clone(); // String clone is needed here
                 spawn_local(async move {
                     // Use requestAnimationFrame to ensure DOM is updated
                     gloo_timers::future::TimeoutFuture::new(0).await;
@@ -1176,7 +1208,14 @@ pub fn ProgramTab() -> impl IntoView {
                         
                         // Update overlay with the exact textarea content
                         if let Some(overlay) = highlight_ref.get_untracked() {
-                            let html = highlight_code(&textarea_value);
+                            let mut html = highlight_code(&textarea_value);
+                            
+                            // Apply error indicators if diagnostics are available
+                            if let Some(lsp) = lsp_client_for_force_clone.as_ref() {
+                                let diagnostics = lsp.get_diagnostics_for_uri(&document_uri_for_force_clone);
+                                html = add_error_indicators(&html, &diagnostics);
+                            }
+                            
                             overlay.set_inner_html(&html);
                             let _ = overlay.set_scroll_top(textarea.scroll_top());
                             let _ = overlay.set_scroll_left(textarea.scroll_left());
@@ -1241,6 +1280,34 @@ pub fn ProgramTab() -> impl IntoView {
                 is_updating_flag.set(false);
                 overlay_update_flag.set(false);
             });
+        }
+    });
+    
+    // Separate effect to immediately update overlay when diagnostics change
+    // This ensures errors are shown as soon as they're detected, even if user is typing
+    let highlight_overlay_ref_diagnostics = highlight_overlay_ref.clone();
+    let textarea_ref_diagnostics = textarea_ref.clone();
+    let lsp_client_for_diagnostics_effect = lsp_client.clone();
+    let document_uri_for_diagnostics_effect = document_uri.to_string();
+    create_effect(move |_| {
+        // Track diagnostics changes to trigger immediate overlay update
+        if let Some(lsp) = lsp_client_for_diagnostics_effect.as_ref() {
+            let diagnostics_map = lsp.diagnostics().get();
+            let diagnostics = diagnostics_map.get(&document_uri_for_diagnostics_effect).cloned().unwrap_or_default();
+            
+            // Update overlay immediately when diagnostics change (whether errors exist or are cleared)
+            if let Some(overlay) = highlight_overlay_ref_diagnostics.get_untracked() {
+                if let Some(textarea) = textarea_ref_diagnostics.get_untracked() {
+                    // Read actual textarea value to ensure sync
+                    let text_for_overlay = textarea.value();
+                    let mut html = highlight_code(&text_for_overlay);
+                    // Apply error indicators (will be empty if no errors)
+                    html = add_error_indicators(&html, &diagnostics);
+                    overlay.set_inner_html(&html);
+                    let _ = overlay.set_scroll_top(textarea.scroll_top());
+                    let _ = overlay.set_scroll_left(textarea.scroll_left());
+                }
+            }
         }
     });
 
@@ -1418,8 +1485,14 @@ pub fn ProgramTab() -> impl IntoView {
     };
 
     // Effect to show/hide hover tooltip based on hover_info
+    // Don't clear hover if we have error diagnostics (error tooltips take priority)
     let lsp_client_for_hover_effect = lsp_client_for_hover.clone();
     create_effect(move |_| {
+        // Check if we have error diagnostics first - if so, don't interfere
+        if hover_error_diagnostics.get().is_some() {
+            return;
+        }
+        
         if let Some(lsp) = lsp_client_for_hover_effect.as_ref() {
             let hover_info = lsp.hover_info();
             let has_hover_data = hover_info.get().is_some();
@@ -1488,6 +1561,34 @@ pub fn ProgramTab() -> impl IntoView {
                 let line_start = before_word.rfind('\n').map(|p| p + 1).unwrap_or(0);
                 let character = (word_range.0 - line_start) as u32;
                 
+                // Check for errors on this line
+                let lsp_for_errors = lsp_client_for_hover.clone();
+                let document_uri_for_errors = document_uri.to_string();
+                let hover_error_diagnostics_clone = hover_error_diagnostics.clone();
+                let diagnostics_map = lsp_for_errors.as_ref().map(|l| l.diagnostics().get());
+                if let Some(diag_map) = diagnostics_map {
+                    let diagnostics = diag_map.get(&document_uri_for_errors).cloned().unwrap_or_default();
+                    // Filter diagnostics for errors on the current line
+                    let line_errors: Vec<_> = diagnostics.iter()
+                        .filter(|d| {
+                            matches!(d.severity, Some(crate::lsp::DiagnosticSeverity::Error))
+                                && d.range.start.line <= line
+                                && d.range.end.line >= line
+                        })
+                        .cloned()
+                        .collect();
+                    
+                    if !line_errors.is_empty() {
+                        hover_error_diagnostics_clone.set(Some(line_errors));
+                        // Show error tooltip immediately
+                        show_hover.set(true);
+                    } else {
+                        hover_error_diagnostics_clone.set(None);
+                    }
+                } else {
+                    hover_error_diagnostics_clone.set(None);
+                }
+                
                 // Check if we're hovering over the same word
                 let new_word_pos = (line, character);
                 let is_same_word = current_hover_word.get_untracked()
@@ -1495,44 +1596,53 @@ pub fn ProgramTab() -> impl IntoView {
                     .unwrap_or(false);
                 
                 if !is_same_word {
-                    // New word - update tracking and hide hover until new data arrives
+                    // New word - update tracking and hide hover until new data arrives (unless we have errors)
                     current_hover_word.set(Some(new_word_pos));
+                    // Only hide hover if we don't have error diagnostics
+                    if hover_error_diagnostics.get_untracked().is_none() {
                     show_hover.set(false); // Hide until new hover data arrives
+                    }
                 }
                 
-                // Debounce: increment timer
-                let timer_id = hover_debounce_timer.get_untracked() + 1;
-                hover_debounce_timer.set(timer_id);
-                
-                let lsp = lsp.clone();
-                let doc_uri = document_uri.to_string();
-                let position = Position { line, character };
-                let hover_debounce_timer_clone = hover_debounce_timer;
-                let current_hover_word_clone = current_hover_word;
-                
-                // Debounce hover requests (200ms - reduced for better responsiveness)
-                spawn_local(async move {
-                    gloo_timers::future::TimeoutFuture::new(200).await;
+                // Only request LSP hover if we don't have error diagnostics on this line
+                // Error tooltips take priority and don't need LSP hover
+                if hover_error_diagnostics.get_untracked().is_none() {
+                    // Debounce: increment timer
+                    let timer_id = hover_debounce_timer.get_untracked() + 1;
+                    hover_debounce_timer.set(timer_id);
                     
-                    // Only proceed if timer hasn't been reset and we're still on the same word
-                    if hover_debounce_timer_clone.get_untracked() == timer_id {
-                        let still_on_same_word = current_hover_word_clone.get_untracked()
-                            .map(|(l, c)| l == position.line && c == position.character)
-                            .unwrap_or(false);
+                    let lsp = lsp.clone();
+                    let doc_uri = document_uri.to_string();
+                    let position = Position { line, character };
+                    let hover_debounce_timer_clone = hover_debounce_timer;
+                    let current_hover_word_clone = current_hover_word;
+                    
+                    // Debounce hover requests (200ms - reduced for better responsiveness)
+                    spawn_local(async move {
+                        gloo_timers::future::TimeoutFuture::new(200).await;
                         
-                        if still_on_same_word {
-                            // Request hover info from LSP
-                            if let Err(e) = lsp.request_hover(doc_uri, position) {
-                                log::warn!("Failed to request hover: {}", e);
+                        // Only proceed if timer hasn't been reset and we're still on the same word
+                        if hover_debounce_timer_clone.get_untracked() == timer_id {
+                            let still_on_same_word = current_hover_word_clone.get_untracked()
+                                .map(|(l, c)| l == position.line && c == position.character)
+                                .unwrap_or(false);
+                            
+                            if still_on_same_word {
+                                // Request hover info from LSP
+                                if let Err(e) = lsp.request_hover(doc_uri, position) {
+                                    log::warn!("Failed to request hover: {}", e);
+                                }
                             }
                         }
-                    }
-                });
+                    });
+                }
             }
         }
     };
 
     let handle_mouse_leave = move |_: ev::MouseEvent| {
+        // Clear error diagnostics when mouse leaves
+        hover_error_diagnostics.set(None);
         show_hover.set(false);
         current_hover_word.set(None);
         hover_debounce_timer.update(|t| *t += 1); // Cancel pending hovers
@@ -1654,21 +1764,48 @@ pub fn ProgramTab() -> impl IntoView {
                     {program.text.get_untracked()}
                 </textarea>
                 </div>
-                </div>
-
-                // Display LSP diagnostics below the editor
-                {lsp_client_for_diagnostics.as_ref().map(|_| view! {
-                    <div class="lsp-diagnostics">
-                        <DiagnosticsList uri=document_uri />
-                    </div>
-                })}
             </div>
 
-            // Show hover tooltip when hovering
+                // Diagnostics are now shown inline as error line highlights
+            </div>
+
+            // Show error tooltip when hovering over error lines
             {
                 move || {
-                    // Only show if hover is enabled, completions are not shown, and we have hover data
                     if show_hover.get() && !show_completions.get() {
+                        let error_diagnostics = hover_error_diagnostics.get();
+                        if let Some(errors) = error_diagnostics {
+                            let error_messages: Vec<String> = errors.iter()
+                                .map(|d| d.message.clone())
+                                .collect();
+                            let pos = hover_position.get();
+                            Some(view! {
+                                <div
+                                    class="hover-tooltip error-tooltip"
+                                    style=format!("left: {}px; top: {}px;", pos.0, pos.1)
+                                >
+                                    <div class="hover-content error-content">
+                                        {error_messages.iter().map(|msg| {
+                                            view! {
+                                                <div class="error-message">{msg.clone()}</div>
+                                            }
+                                        }).collect_view()}
+                                    </div>
+                                </div>
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+            }
+            // Show LSP hover tooltip when hovering
+            {
+                move || {
+                    // Only show if hover is enabled, completions are not shown, and we have hover data (and no error diagnostics)
+                    if show_hover.get() && !show_completions.get() && hover_error_diagnostics.get().is_none() {
                         lsp_client_for_hover_tooltip.as_ref().and_then(|lsp| {
                             let hover_signal = lsp.hover_info();
                             let hover_data = hover_signal.get();

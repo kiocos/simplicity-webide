@@ -61,4 +61,33 @@
     border-right: 5px solid transparent;
     border-bottom: 5px solid #1e1e1e;
   }
+
+  // Error tooltip styling
+  &.error-tooltip {
+    background-color: #2a1a1a;
+    border: 1px solid #ff4444;
+    border-left: 3px solid #ff4444;
+
+    &::before {
+      border-bottom-color: #ff4444;
+    }
+
+    &::after {
+      border-bottom-color: #2a1a1a;
+    }
+
+    .error-content {
+      .error-message {
+        color: #ff6666;
+        padding: 4px 0;
+        line-height: 1.5;
+
+        &:not(:last-child) {
+          border-bottom: 1px solid rgba(255, 68, 68, 0.3);
+          margin-bottom: 4px;
+          padding-bottom: 8px;
+        }
+      }
+    }
+  }
 }
