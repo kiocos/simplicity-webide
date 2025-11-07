@@ -535,14 +535,14 @@ pub fn ProgramTab() -> impl IntoView {
             
             // Only proceed if this is still the latest update request
             if typing_debounce_token_clone.get_untracked() == update_token {
-                if let Some(highlight) = highlight_overlay_ref_clone2.get_untracked() {
+            if let Some(highlight) = highlight_overlay_ref_clone2.get_untracked() {
                     overlay_update_in_progress_clone.set(true);
-                    // Fast local highlight while typing
-                    let html = highlight_code(&new_text_clone);
-                    highlight.set_inner_html(&html);
-                    if let Some(textarea) = textarea_ref_clone2.get_untracked() {
-                        let _ = highlight.set_scroll_top(textarea.scroll_top());
-                        let _ = highlight.set_scroll_left(textarea.scroll_left());
+                // Fast local highlight while typing
+                let html = highlight_code(&new_text_clone);
+                highlight.set_inner_html(&html);
+                if let Some(textarea) = textarea_ref_clone2.get_untracked() {
+                    let _ = highlight.set_scroll_top(textarea.scroll_top());
+                    let _ = highlight.set_scroll_left(textarea.scroll_left());
                     }
                     overlay_update_in_progress_clone.set(false);
                 }
@@ -694,7 +694,7 @@ pub fn ProgramTab() -> impl IntoView {
     let lsp_client_for_brackets = lsp_client.clone();
     let lsp_client_for_memo = lsp_client.clone();
     let document_uri_for_brackets = document_uri.to_string();
-    
+
     let handle_keydown = move |event: ev::KeyboardEvent| {
         let is_completions_shown = show_completions.get_untracked();
         let key = event.key();
@@ -887,7 +887,7 @@ pub fn ProgramTab() -> impl IntoView {
                                 let replace_start = word_start;
                                 
                                 // Replace from word start to cursor position
-                                program.text.update(|text| {
+                                    program.text.update(|text| {
                                     text.replace_range(replace_start..cursor_pos_usize, &label);
                                 });
                                 
@@ -895,56 +895,56 @@ pub fn ProgramTab() -> impl IntoView {
                                 let new_pos = replace_start + label.len();
                                 let _ = element.set_selection_range(new_pos as u32, new_pos as u32);
 
-                                // Immediately refresh overlay with local highlight
-                                overlay_dirty.set(true);
+                                    // Immediately refresh overlay with local highlight
+                                    overlay_dirty.set(true);
                                 overlay_update_in_progress.set(true);
-                                if let Some(overlay) = highlight_overlay_ref.get_untracked() {
-                                    let html = highlight_code(&program.text.get_untracked());
-                                    overlay.set_inner_html(&html);
-                                    if let Some(ta) = textarea_ref.get_untracked() {
-                                        let _ = overlay.set_scroll_top(ta.scroll_top());
-                                        let _ = overlay.set_scroll_left(ta.scroll_left());
+                                    if let Some(overlay) = highlight_overlay_ref.get_untracked() {
+                                        let html = highlight_code(&program.text.get_untracked());
+                                        overlay.set_inner_html(&html);
+                                        if let Some(ta) = textarea_ref.get_untracked() {
+                                            let _ = overlay.set_scroll_top(ta.scroll_top());
+                                            let _ = overlay.set_scroll_left(ta.scroll_left());
+                                        }
                                     }
-                                }
                                 overlay_update_in_progress.set(false);
-                                // Queue a next-tick refresh to catch layout
-                                {
-                                    let highlight_ref = highlight_overlay_ref.clone();
-                                    let textarea_ref_clone = textarea_ref.clone();
-                                    let text_snapshot = program.text.get_untracked();
+                                    // Queue a next-tick refresh to catch layout
+                                    {
+                                        let highlight_ref = highlight_overlay_ref.clone();
+                                        let textarea_ref_clone = textarea_ref.clone();
+                                        let text_snapshot = program.text.get_untracked();
                                     let overlay_update_flag = overlay_update_in_progress.clone();
-                                    spawn_local(async move {
-                                        gloo_timers::future::TimeoutFuture::new(0).await;
+                                        spawn_local(async move {
+                                            gloo_timers::future::TimeoutFuture::new(0).await;
                                         overlay_update_flag.set(true);
-                                        if let Some(overlay) = highlight_ref.get_untracked() {
-                                            let html = highlight_code(&text_snapshot);
-                                            overlay.set_inner_html(&html);
-                                            if let Some(ta) = textarea_ref_clone.get_untracked() {
-                                                let _ = overlay.set_scroll_top(ta.scroll_top());
-                                                let _ = overlay.set_scroll_left(ta.scroll_left());
+                                            if let Some(overlay) = highlight_ref.get_untracked() {
+                                                let html = highlight_code(&text_snapshot);
+                                                overlay.set_inner_html(&html);
+                                                if let Some(ta) = textarea_ref_clone.get_untracked() {
+                                                    let _ = overlay.set_scroll_top(ta.scroll_top());
+                                                    let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                }
                                             }
-                                        }
                                         overlay_update_flag.set(false);
-                                        // Overlay updated; clear dirty flag
-                                        overlay_dirty.set(false);
-                                    });
-                                }
+                                            // Overlay updated; clear dirty flag
+                                            overlay_dirty.set(false);
+                                        });
+                                    }
 
-                                // Debounced didChange to LSP post-completion
-                                if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
-                                    let lsp = lsp.clone();
-                                    let uri = document_uri.to_string();
-                                    let text_for_lsp = program.text.get_untracked();
-                                    spawn_local(async move {
-                                        gloo_timers::future::TimeoutFuture::new(300).await;
-                                        crate::logging::log_event(
-                                            "LSP_DID_CHANGE_AFTER_COMPLETION",
-                                            serde_json::json!({"uri": uri}),
-                                        );
-                                        if let Err(e) = lsp.did_change(uri, text_for_lsp) {
-                                            log::warn!("Failed to update document in LSP after completion: {}", e);
-                                        }
-                                    });
+                                    // Debounced didChange to LSP post-completion
+                                    if let Some(lsp) = lsp_client_for_completion_request_key.as_ref() {
+                                        let lsp = lsp.clone();
+                                        let uri = document_uri.to_string();
+                                        let text_for_lsp = program.text.get_untracked();
+                                        spawn_local(async move {
+                                            gloo_timers::future::TimeoutFuture::new(300).await;
+                                            crate::logging::log_event(
+                                                "LSP_DID_CHANGE_AFTER_COMPLETION",
+                                                serde_json::json!({"uri": uri}),
+                                            );
+                                            if let Err(e) = lsp.did_change(uri, text_for_lsp) {
+                                                log::warn!("Failed to update document in LSP after completion: {}", e);
+                                            }
+                                        });
                                 }
                             }
                         }
@@ -1548,35 +1548,35 @@ pub fn ProgramTab() -> impl IntoView {
             </div>
             <div class="program-layout">
             <div class="editor-wrapper-container">
-                <div class="editor-container">
-                    <div class="line-numbers" node_ref=line_numbers_ref>
-                        {move || line_numbers.get()}
-                    </div>
-                    <div class="editor-wrapper">
-                        <pre
-                            class="syntax-highlight-overlay"
-                            node_ref=highlight_overlay_ref
-                        />
-                    <textarea
-                        class="program-input-field"
-                        placeholder="Enter your program here"
-                        rows="25"
-                        cols="80"
-                        spellcheck="false"
-                        wrap="off"
-                        prop:value=program.text
-                        on:input=update_program_text
-                        on:keydown=handle_keydown
-                        on:scroll=handle_scroll
-                        on:mousemove=handle_mouse_move
-                        on:mouseleave=handle_mouse_leave
-                        node_ref=textarea_ref
-                        name="program-input"
-                        style:color="transparent"
-                    >
-                        {program.text.get_untracked()}
-                    </textarea>
-                    </div>
+            <div class="editor-container">
+                <div class="line-numbers" node_ref=line_numbers_ref>
+                    {move || line_numbers.get()}
+                </div>
+                <div class="editor-wrapper">
+                    <pre
+                        class="syntax-highlight-overlay"
+                        node_ref=highlight_overlay_ref
+                    />
+                <textarea
+                    class="program-input-field"
+                    placeholder="Enter your program here"
+                    rows="25"
+                    cols="80"
+                    spellcheck="false"
+                    wrap="off"
+                    prop:value=program.text
+                    on:input=update_program_text
+                    on:keydown=handle_keydown
+                    on:scroll=handle_scroll
+                    on:mousemove=handle_mouse_move
+                    on:mouseleave=handle_mouse_leave
+                    node_ref=textarea_ref
+                    name="program-input"
+                    style:color="transparent"
+                >
+                    {program.text.get_untracked()}
+                </textarea>
+                </div>
                 </div>
 
                 // Display LSP diagnostics below the editor
@@ -1674,7 +1674,7 @@ pub fn ProgramTab() -> impl IntoView {
                                                     }
                                                     
                                                     // Replace from word start to cursor position
-                                                    program.text.update(|text| {
+                                                        program.text.update(|text| {
                                                         text.replace_range(word_start..cursor_pos_usize, &label);
                                                     });
                                                     
@@ -1682,62 +1682,62 @@ pub fn ProgramTab() -> impl IntoView {
                                                     let new_pos = word_start + label.len();
                                                     let _ = element.set_selection_range(new_pos as u32, new_pos as u32);
 
-                                                    // Immediately refresh overlay with local highlight (no extra keystroke needed)
+                                                        // Immediately refresh overlay with local highlight (no extra keystroke needed)
                                                     overlay_update_in_progress.set(true);
-                                                    if let Some(overlay) = highlight_overlay_ref.get_untracked() {
-                                                        let html = crate::components::program_window::syntax_highlighter::highlight_code(&program.text.get_untracked());
-                                                        overlay.set_inner_html(&html);
-                                                        if let Some(ta) = textarea_ref.get_untracked() {
-                                                            let _ = overlay.set_scroll_top(ta.scroll_top());
-                                                            let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                        if let Some(overlay) = highlight_overlay_ref.get_untracked() {
+                                                            let html = crate::components::program_window::syntax_highlighter::highlight_code(&program.text.get_untracked());
+                                                            overlay.set_inner_html(&html);
+                                                            if let Some(ta) = textarea_ref.get_untracked() {
+                                                                let _ = overlay.set_scroll_top(ta.scroll_top());
+                                                                let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                            }
                                                         }
-                                                    }
                                                     overlay_update_in_progress.set(false);
-                                                    // Also queue a next-tick refresh to catch any layout changes
-                                                    {
-                                                        let highlight_ref = highlight_overlay_ref.clone();
-                                                        let textarea_ref_clone = textarea_ref.clone();
-                                                        let text_snapshot = program.text.get_untracked();
+                                                        // Also queue a next-tick refresh to catch any layout changes
+                                                        {
+                                                            let highlight_ref = highlight_overlay_ref.clone();
+                                                            let textarea_ref_clone = textarea_ref.clone();
+                                                            let text_snapshot = program.text.get_untracked();
                                                         let overlay_update_flag = overlay_update_in_progress.clone();
-                                                        spawn_local(async move {
-                                                            gloo_timers::future::TimeoutFuture::new(0).await;
+                                                            spawn_local(async move {
+                                                                gloo_timers::future::TimeoutFuture::new(0).await;
                                                             overlay_update_flag.set(true);
-                                                            if let Some(overlay) = highlight_ref.get_untracked() {
-                                                                let html = crate::components::program_window::syntax_highlighter::highlight_code(&text_snapshot);
-                                                                overlay.set_inner_html(&html);
-                                                                if let Some(ta) = textarea_ref_clone.get_untracked() {
-                                                                    let _ = overlay.set_scroll_top(ta.scroll_top());
-                                                                    let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                                if let Some(overlay) = highlight_ref.get_untracked() {
+                                                                    let html = crate::components::program_window::syntax_highlighter::highlight_code(&text_snapshot);
+                                                                    overlay.set_inner_html(&html);
+                                                                    if let Some(ta) = textarea_ref_clone.get_untracked() {
+                                                                        let _ = overlay.set_scroll_top(ta.scroll_top());
+                                                                        let _ = overlay.set_scroll_left(ta.scroll_left());
+                                                                    }
                                                                 }
-                                                            }
                                                             overlay_update_flag.set(false);
-                                                        });
-                                                    }
+                                                            });
+                                                        }
+
+                                                        // Debounced didChange to LSP for completions insertion
+                                                        if let Some(lsp) = lsp_for_completion_handler.as_ref() {
+                                                            let lsp = lsp.clone();
+                                                            let uri = document_uri.to_string();
+                                                            let text_for_lsp = program.text.get_untracked();
+                                                            spawn_local(async move {
+                                                                gloo_timers::future::TimeoutFuture::new(300).await;
+                                                                crate::logging::log_event(
+                                                                    "LSP_DID_CHANGE_AFTER_COMPLETION",
+                                                                    serde_json::json!({"uri": uri}),
+                                                                );
+                                                                if let Err(e) = lsp.did_change(uri, text_for_lsp) {
+                                                                    log::warn!("Failed to update document in LSP after completion: {}", e);
+                                                                }
+                                                            });
+                                                        }
                                                     
-                                                    // Debounced didChange to LSP for completions insertion
-                                                    if let Some(lsp) = lsp_for_completion_handler.as_ref() {
-                                                        let lsp = lsp.clone();
-                                                        let uri = document_uri.to_string();
-                                                        let text_for_lsp = program.text.get_untracked();
-                                                        spawn_local(async move {
-                                                            gloo_timers::future::TimeoutFuture::new(300).await;
-                                                            crate::logging::log_event(
-                                                                "LSP_DID_CHANGE_AFTER_COMPLETION",
-                                                                serde_json::json!({"uri": uri}),
-                                                            );
-                                                            if let Err(e) = lsp.did_change(uri, text_for_lsp) {
-                                                                log::warn!("Failed to update document in LSP after completion: {}", e);
-                                                            }
-                                                        });
-                                                    }
-                                                    
-                                                    show_completions.set(false);
-                                                    completion_trigger_pos.set(None);
+                                            show_completions.set(false);
+                                            completion_trigger_pos.set(None);
                                                 }
                                             }
-                                    }
-                                    position=completion_position.get()
-                                />
+                                        }
+                                        position=completion_position.get()
+                                    />
                         })
                     } else {
                         None
@@ -1745,68 +1745,16 @@ pub fn ProgramTab() -> impl IntoView {
                 }
             }
 
-            // Chat panel
-            <div class="chat-container">
-                <div class="chat-header">
-                    <h3>"AI Assistant"</h3>
-                    {move || {
-                        mcp_client.as_ref().map(|mcp| {
-                            let state = mcp.state();
-                            view! {
-                                <span class="chat-status">
-                                    {match state.get() {
-                                        crate::mcp::client::MCPConnectionState::Connected => "🟢",
-                                        crate::mcp::client::MCPConnectionState::Connecting => "🟡",
-                                        _ => "🔴",
-                                    }}
-                                </span>
-                            }
-                        })
-                    }}
+            // Chat panel (hidden for now)
+            {move || {
+                const SHOW_CHAT: bool = false;
+                if SHOW_CHAT {
+                    Some(view! { <div></div> })
+                } else {
+                    None::<leptos::HtmlElement<leptos::html::Div>>
+                }
+            }}
                 </div>
-                <div class="chat-messages">
-                    {move || {
-                        chat_messages.get().into_iter().map(|(role, content)| {
-                            let role_class = if role == "user" { "chat-message-user" } else { "chat-message-assistant" };
-                            view! {
-                                <div class=format!("chat-message {}", role_class)>
-                                    <div class="chat-message-content">{content}</div>
-                                </div>
-                            }
-                        }).collect::<Vec<_>>()
-                    }}
-                    {move || {
-                        if pending_chat_request.get().is_some() {
-                            Some(view! {
-                                <div class="chat-message chat-message-assistant">
-                                    <div class="chat-message-content">"Thinking..."</div>
-                                </div>
-                            })
-                        } else {
-                            None
-                        }
-                    }}
-                </div>
-                <div class="chat-input-container">
-                    <textarea
-                        class="chat-input"
-                        placeholder="Ask me about Simplicity contracts..."
-                        rows="3"
-                        prop:value=chat_input
-                        on:input=move |e| chat_input.set(event_target_value(&e))
-                        on:keydown=handle_chat_keydown
-                        node_ref=chat_input_ref
-                    />
-                    <button
-                        class="chat-send-button"
-                        on:click=send_chat_message
-                        disabled=move || pending_chat_request.get().is_some() || chat_input.get().trim().is_empty()
-                    >
-                        "Send"
-                    </button>
-                </div>
-            </div>
-            </div>
         </div>
     }
 }
