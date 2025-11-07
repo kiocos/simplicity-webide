@@ -1259,6 +1259,15 @@ pub fn ProgramTab() -> impl IntoView {
             }
         }
 
+        // Close signature tooltip on any key press (except Ctrl+Space which may show it)
+        if show_signature_tooltip.get_untracked() {
+            // Don't close if it's Ctrl+Space (which may show it again) or Escape (already handled)
+            if !(event.ctrl_key() && event.key_code() == SPACE_KEY) && event.key_code() != 27 {
+                show_signature_tooltip.set(false);
+                signature_content.set(None);
+            }
+        }
+
         // Normal key handlers
         if event.ctrl_key() && event.key_code() == ENTER_KEY {
             runtime.run();
